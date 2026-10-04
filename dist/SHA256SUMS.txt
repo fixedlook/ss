@@ -1,0 +1,2 @@
+f79ee3e8c9f156980ac5e4016b5f625ea86d23194d60b99f83875dfcea073cef  dist/MNQ-CvdDivergence.jar
+9dd5c5bef9c674c74cb4269ff551569f4fb1ecbbf5db16eece647a93e6388efe  dist/MNQ-BidAskExporter.jar
