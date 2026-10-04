@@ -376,6 +376,10 @@ public class BidAskExporterStudy extends Study {
       long barsWritten = 0;
       long barsWithFlow = 0;
 
+      status = String.format("Exporting %d bars to %s - MotiveWave will not respond until it finishes.",
+          n - from, base);
+      info(status);
+
       int c = from;
       while (c < n) {
         int cEnd = Math.min(c + chunk, n);
@@ -416,7 +420,9 @@ public class BidAskExporterStudy extends Study {
 
         c = cEnd;
         status = String.format("Exported %d / %d bars...", barsWritten, n - from);
-        info(status);
+        // progress goes to the log, not to info(): info() may be a modal dialog
+        // and this runs once per chunk.
+        System.out.println("[BidAskExporter] " + status);
       }
 
       if (ticks == 0) {
@@ -424,11 +430,21 @@ public class BidAskExporterStudy extends Study {
                + "historical tick data for it - the export cannot work without it.";
         error(status);
       } else {
-        status = String.format(
-            "Wrote %d bars to %s. Ticks read %d, unmatched %d. Real bid/ask on %d of %d bars (%.0f%%).",
-            barsWritten, base, ticks, unmatched, barsWithFlow, barsWritten,
-            barsWritten == 0 ? 0.0 : 100.0 * barsWithFlow / barsWritten);
-        info(status);
+        StringBuilder failed = new StringBuilder();
+        if (wb != null && wb.checkError()) failed.append("bar file ");
+        if (wp != null && wp.checkError()) failed.append("profile file ");
+        if (wf != null && wf.checkError()) failed.append("footprint file ");
+        if (failed.length() > 0) {
+          status = "Write failed for the " + failed
+                 + "- check the CSV Path and that the file is not open in another program.";
+          error(status);
+        } else {
+          status = String.format(
+              "Wrote %d bars to %s. Ticks read %d, unmatched %d. Real bid/ask on %d of %d bars (%.0f%%).",
+              barsWritten, base, ticks, unmatched, barsWithFlow, barsWritten,
+              barsWritten == 0 ? 0.0 : 100.0 * barsWithFlow / barsWritten);
+          info(status);
+        }
       }
     } catch (Exception e) {
       status = "Export failed: " + e;
