@@ -51,13 +51,20 @@ jobs:
           echo "--- compiled classes ---"
           find MotiveWaveStudy/build -name '*.class'
 
-      - name: Package jar
+      - name: Package jars
         run: |
-          mkdir -p dist
-          jar --create --file dist/MNQ-CvdDivergence.jar -C MotiveWaveStudy/build .
-          echo "--- jar contents ---"
+          set -e
+          mkdir -p dist stage-cvd stage-exp
+          # one jar per study, so importing one does not drag in the other
+          (cd MotiveWaveStudy/build && find com -name 'CvdDivergenceStudy*.class' -exec cp --parents {} ../../stage-cvd/ \;)
+          (cd MotiveWaveStudy/build && find com -name 'BidAskExporterStudy*.class' -exec cp --parents {} ../../stage-exp/ \;)
+          jar --create --file dist/MNQ-CvdDivergence.jar -C stage-cvd com
+          jar --create --file dist/MNQ-BidAskExporter.jar -C stage-exp com
+          echo "--- MNQ-CvdDivergence.jar ---"
           jar --list --file dist/MNQ-CvdDivergence.jar
-          sha256sum dist/MNQ-CvdDivergence.jar | tee dist/MNQ-CvdDivergence.jar.sha256
+          echo "--- MNQ-BidAskExporter.jar ---"
+          jar --list --file dist/MNQ-BidAskExporter.jar
+          sha256sum dist/MNQ-CvdDivergence.jar dist/MNQ-BidAskExporter.jar | tee dist/SHA256SUMS.txt
           {
             echo "built: $(date -u +%FT%TZ)"
             echo "jdk:   $(javac -version 2>&1)"
@@ -70,6 +77,6 @@ jobs:
         run: |
           git config user.name "arena-build-bot"
           git config user.email "bot@users.noreply.github.com"
-          git add -f dist/MNQ-CvdDivergence.jar dist/MNQ-CvdDivergence.jar.sha256 dist/BUILD-LOG.txt
+          git add -f dist/MNQ-CvdDivergence.jar dist/MNQ-BidAskExporter.jar dist/SHA256SUMS.txt dist/BUILD-LOG.txt
           git commit -m "Build MotiveWave study jar [skip ci]" || { echo "nothing to commit"; exit 0; }
           git push
