@@ -1,0 +1,29 @@
+sessions with a fitted lambda: 1,007
+
+====================================================================================================
+FAMA-MACBETH KYLE LAMBDA  (points per 1,000 net contracts; t vs zero across sessions)
+====================================================================================================
+  all minutes                                  lambda =  47.4517 pts/1000  (sd 153.0221)  t =  +9.8   n=1,007
+  INSIDE an LVN band                           lambda =  44.7645 pts/1000  (sd 207.6364)  t =  +5.9   n=745
+  outside the bands                            lambda =  47.8541 pts/1000  (sd 159.1204)  t =  +9.5   n=1,003
+  all, vol-normalised (dp/sigma per contract)  lambda =   5.0545 pts/1000  (sd 11.8505)  t = +13.5   n=1,007
+
+  paired sessions (both sides): 741
+  lambda_in - lambda_out =  +7.2260 pts/1000   t =  +1.2
+  ratio in/out = 1.192   (median ratio 1.01)
+
+====================================================================================================
+WHY: the same test in plain magnitudes
+====================================================================================================
+  median |1-min move| (pts)        inside      4.00   outside      3.75   ratio  1.07   (paired median diff t =  +8.4)
+  median 1-min volume (contracts)  inside   1777.00   outside   1541.50   ratio  1.15   (paired median diff t =  +8.3)
+
+Reading it
+  * lambda_in > lambda_out with a decent t means a given amount of aggressive flow
+    moves price further inside the zone: thin book, fast pass-through.  That is the
+    mechanical reason a stop inside an LVN gets taken out by the traverse.
+  * It does NOT say the direction reverses - it says the market is less able to
+    absorb flow there, so any move is bigger and any rejection has to come from
+    someone posting size, i.e. from absorption, not from the zone itself.
+
+wrote results/kyle_lambda_lvn.csv

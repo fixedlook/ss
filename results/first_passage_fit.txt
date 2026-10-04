@@ -1,0 +1,47 @@
+========================================================================================================
+FITTED DRIFT-TO-VARIANCE RATIO k (1/points) AND ITS CHARACTERISTIC DISTANCE 1/k
+  k > 0 : price drifts toward the reversal target    k < 0 : toward the stop
+  p = SL/(SL+TP) at k = 0, i.e. the martingale null
+========================================================================================================
+arm                                    | n cells |   k (1/pt) |  1/k (pts) |  rw. RMSE | null RMSE
+--------------------------------------------------------------------------------------------------------
+A  LVN arrival + 10-min divergence     |      63 |   -0.00153 |       -654 |    1.65% |    1.92%
+L  LVN arrival, no divergence          |      63 |   -0.00217 |       -461 |    1.17% |    1.93%
+M  same entries, momentum side         |      63 |   -0.00176 |       -568 |    1.55% |    1.94%
+B  divergence turns on in the level    |      63 |   -0.00305 |       -328 |    1.96% |    2.80%
+C  control: every minute, reversal side |      63 |   -0.00231 |       -433 |    1.61% |    2.25%
+
+SCALE STABILITY of k - fit on sub-grids of arm A and of the control C
+--------------------------------------------------------------------------------------------------------
+subset                                 |       k(A) |       k(C) | n cells
+tight  SL+TP <= 60                     |   +0.00105 |   -0.00031 |      28
+medium 60 < SL+TP <= 130               |   -0.00207 |   -0.00267 |      33
+wide   SL+TP > 130                     |   -0.00220 |   -0.00359 |       2
+SL <= 20 only                          |   -0.00257 |   -0.00396 |      27
+SL >= 40 only                          |   -0.00037 |   -0.00109 |      18
+
+HEADLINE CELLS - resolved win share vs the martingale null
+--------------------------------------------------------------------------------------------------------
+arm    SL/TP |       n  resolved  win|res    null   model |  implied k
+  A   30/60  |   2,532     0.0%   30.5%  33.3%  31.8% |   -0.00284
+  A   10/50  |   2,532     0.0%   15.1%  16.7%  16.0% |   -0.00392
+  A   20/40  |   2,532     0.0%   32.6%  33.3%  32.3% |   -0.00110
+  A   50/100 |   2,532     0.0%   30.2%  33.3%  30.8% |   -0.00190
+  A   15/30  |   2,532     0.0%   33.0%  33.3%  32.6% |   -0.00058
+  A   50/50  |   2,532     0.0%   49.3%  50.0%  48.1% |   -0.00056
+  C   30/60  | 388,224     0.0%   30.6%  33.3%  31.1% |   -0.00280
+  C   10/50  | 388,224     0.0%   14.8%  16.7%  15.7% |   -0.00462
+  C   50/100 | 388,224     0.0%   28.1%  33.3%  29.6% |   -0.00326
+  M   30/60  |   2,532     0.0%   31.4%  33.3%  31.6% |   -0.00198
+  M   50/100 |   2,532     0.0%   28.4%  33.3%  30.4% |   -0.00306
+  L   30/60  |  16,636     0.0%   31.0%  33.3%  31.2% |   -0.00238
+
+How to read it
+  * 1/k is the distance over which drift matters.  If 1/k >> your stop distance,
+     the setup cannot pay for the asymmetry: you are paying a real spread to take
+     a coin flip.  That is what the 10-30 pt stops in this grid are.
+  * k is nearly the same for A and for the every-minute control C, so what little
+     drift exists is a property of the MARKET at that scale, not of the setup.
+  * A single k with a small RMSE would say the whole 63-cell surface is one
+     number; a drifting k across scales means the process is NOT Brownian and the
+     barrier geometry has to be modelled directly (jumps, vol clustering).
