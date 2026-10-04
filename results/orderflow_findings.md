@@ -1,5 +1,21 @@
 # Order flow — first use of the bid/ask split
 
+> ## RETRACTED: the CVD-divergence result in this file is an artifact
+>
+> See `results/lvn_cvd_findings.md`. This study sampled **every 10th minute** of
+> each session (i = 40, 50, 60, …). Re-run on **every minute**, the identical
+> divergence flag gives **+0.21%, t = 0.12** — not +3.09%.
+>
+> The residue-class breakdown in that file shows exactly why: on `i ≡ 0 (mod 10)`
+> the effect is +3.09%, and across the other nine residue classes it ranges from
+> −1.70% to +2.75%. **The 10-minute grid is the luckiest of ten possible
+> samples**, and this study drew precisely it. 200 random 10% subsamples average
+> +0.10% (sd 2.34%); only 11% of them reach +3.09%.
+>
+> What still stands here: the base rates, the row-order bug, the boxes null, the
+> power arithmetic, and every *negative* result. What does not stand: the
+> divergence signal, the "independent repeat" of it, and the absorption cell.
+
 Every previous test used total volume, which is direction-agnostic. This is the
 first that uses **who was buying and who was selling**.
 
@@ -36,13 +52,13 @@ The bug alone would have produced a false finding.
 | high trade count | 46.45% | 50.26% | −3.82% | 211 | [−10.27, +3.36] | −0.03 / −9.29 |
 
 **CVD divergence** = cumulative delta moving opposite to price over the last 10
-minutes. Price falling while net aggression is positive, or vice versa. It showed
-**+3.09%** here and **+2.66%** in the independent at-box run, with both halves
-positive in both runs.
+minutes. Price falling while net aggression is positive, or vice versa.
 
-**It is not significant** — the CI spans zero. But it is the first candidate in
-this project that is (a) built on order flow, (b) measured with a clean reference,
-and (c) sign-consistent across halves in two separate runs.
+~~It showed +3.09% here and +2.66% in the independent at-box run, with both
+halves positive in both runs.~~ **DEAD — see the retraction at the top.** Both
+runs used the same 10-minute sampling grid; the "independent repeat" was the same
+artifact drawn twice from overlapping minutes. On every minute the effect is
++0.21%.
 
 Directional check: CVD divergence gives P(up) 46.44% vs 49.27% — it does not
 cleanly predict direction either.
@@ -52,7 +68,7 @@ cleanly predict direction either.
 | | n | reversal |
 |---|---|---|
 | at a box | 174 | **49.43%** |
-| elsewhere | 3,673 | **50.15%** |
+| elsewhere | 3,601 | **50.15%** |
 
 −0.72pp. Boxes are neutral, the fifth independent confirmation.
 
