@@ -1,0 +1,30 @@
+sessions 988   (null = 10 within-session permutations each)
+
+========================================================================================================
+VARIANCE RATIO: REAL vs PERMUTED NULL (paired by session)
+========================================================================================================
+     |       --- direct estimator ---       |         --- ACF-implied ---         
+   q |     real     null      diff       t |     real     null      diff       t
+--------------------------------------------------------------------------------
+   2 |   0.9952   0.9966   -0.0013    -0.6 |   0.9998   0.9965   +0.0033    +1.4 |
+   5 |   0.9701   0.9880   -0.0179    -3.8 |   0.9850   0.9881   -0.0031    -0.7 |
+  10 |   0.9340   0.9747   -0.0408    -6.0 |   0.9622   0.9755   -0.0132    -2.0 |
+  30 |   0.8562   0.9220   -0.0658    -6.2 |   0.9138   0.9287   -0.0149    -1.4 |
+  60 |   0.7589   0.8367   -0.0778    -5.7 |   0.8542   0.8597   -0.0055    -0.4 |
+
+Interpretation
+  diff is VR(real) - VR(permuted).  A permuted series is a martingale WITH the real
+  data's fat tails, volatility level and minute spacing.  So:
+    diff < 0 with |t| > 3  -> genuine mean reversion exists and can be sized up.
+    diff ~ 0               -> the price path is ordered like a random shuffle of its
+                              own returns.  No entry rule can beat a barrier
+                              structure, which is exactly what the 63-cell SL/TP grid
+                              and the fitted k ~ 0 both said.
+    diff > 0               -> momentum.
+
+for scale: median 1-min sigma 6.81 pts -> a 60-minute move is ~53 pts under a random walk
+  VR( 2) shortfall -0.0013  ->  60-min-equivalent sigma is 99.9% of the random-walk value
+  VR( 5) shortfall -0.0179  ->  60-min-equivalent sigma is 99.1% of the random-walk value
+  VR(10) shortfall -0.0408  ->  60-min-equivalent sigma is 97.9% of the random-walk value
+  VR(30) shortfall -0.0658  ->  60-min-equivalent sigma is 96.7% of the random-walk value
+  VR(60) shortfall -0.0778  ->  60-min-equivalent sigma is 96.0% of the random-walk value

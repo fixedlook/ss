@@ -1,0 +1,43 @@
+sessions 988
+
+median 1-min sigma 6.81 pts
+
+================================================================================================
+AUTOCORRELATION of 1-minute returns (negative = mean reversion)
+================================================================================================
+  rho(1)                                         -0.0002   t =    -0.1   n=988
+  rho(2)                                         -0.0084   t =    -4.0   n=988
+  rho(3)                                         -0.0055   t =    -2.9   n=988
+  rho(5)                                         -0.0047   t =    -2.4   n=988
+  rho(10)                                        +0.0004   t =    +0.2   n=988
+  rho(20)                                        +0.0005   t =    +0.3   n=988
+  rho(40)                                        +0.0032   t =    +2.0   n=988
+  rho(60)                                        +0.0029   t =    +1.9   n=988
+
+================================================================================================
+VARIANCE RATIO of 1-minute returns (< 1 = mean reversion, = 1 = random walk)
+================================================================================================
+  VR(2)                                          +0.9952   t =  +432.2   n=988
+  VR(5)                                          +0.9701   t =  +212.8   n=988
+  VR(10)                                         +0.9340   t =  +141.8   n=988
+  VR(30)                                         +0.8562   t =   +83.7   n=988
+  VR(60)                                         +0.7712   t =   +57.2   n=943
+
+  implied VR(inf) from the ACF: 0.976
+
+================================================================================================
+5-MINUTE BARS - the timescale the CvdDivergence study runs on
+================================================================================================
+  rho(1) of 5-min returns                        -0.0344   t =    -8.5   n=988
+  rho(2) of 5-min returns                        -0.0030   t =    -0.7   n=988
+  rho(3) of 5-min returns                        -0.0152   t =    -3.9   n=988
+
+How to read it
+  rho < 0 and VR < 1  -> the process genuinely undoes moves: a reversal bet has a
+                         real (if small) positive expectancy BEFORE costs, and the
+                         only question is whether costs eat it.
+  rho ~ 0 and VR ~ 1  -> martingale.  No barrier structure can have positive
+                         expectancy: every SL/TP combination is a fair game minus
+                         the spread, which is exactly what the 63-cell grid showed.
+  rho > 0             -> trending: reversal bets lose systematically, which is what
+                         the negative k in the first-passage fit suggested.
