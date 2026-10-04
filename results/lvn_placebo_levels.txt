@@ -1,0 +1,25 @@
+============================================================================================================
+REAL LVN BANDS
+============================================================================================================
+                                   |  lv&div |      lv |  div@lv | INTERACT |           95% CI | n(lv&div)
+             arrival x CVD div 10m |  52.58% |  49.44% |  +3.14% |  +3.49% | [+0.05%,+6.85%] |  1,181
+            in band  x CVD div 10m |  50.64% |  49.47% |  +1.18% |  +1.73% | [-1.08%,+4.69%] |  4,741
+
+============================================================================================================
+PLACEBO A - random levels, same count and widths, 60 seeds
+============================================================================================================
+placebo INTERACTION   mean -1.19%   sd 1.58%   central 95% [-4.00%,+1.58%]
+placebo div-at-level  mean -1.25%   sd 1.48%
+placebo arrival rate  mean 6.1%   (real arrivals: 6.2%)
+
+REAL INTERACTION      +3.49%   CI [+0.05%,+6.85%]
+share of placebo seeds at least this large: 0.0%  (0/60)
+
+============================================================================================================
+PLACEBO B - round numbers (levels every N points, nothing to do with volume)
+============================================================================================================
+     round 25pt arrivals x div 10m |  49.65% |  49.58% |  +0.07% |  +0.26% | [-1.45%,+1.90%] |  3,823
+     round 50pt arrivals x div 10m |  49.46% |  49.52% |  -0.05% |  +0.09% | [-2.55%,+2.47%] |  2,054
+    round 100pt arrivals x div 10m |  48.49% |  49.76% |  -1.27% |  -1.20% | [-5.14%,+2.20%] |  1,025
+
+(columns: reversal rate when level AND divergence / level alone / jump in reversal from divergence at that level / interaction / n of the level-and-divergence cell)
