@@ -1,0 +1,61 @@
+flow sessions 1,007
+  0/1007 sessions 0s
+  250/1007 sessions 0s
+  500/1007 sessions 0s
+  750/1007 sessions 0s
+  1000/1007 sessions 1s
+cell (30, 30): 1,842 trades, gross -0.24 pts, net -1.24 pts
+cell (20, 40): 1,889 trades, gross +0.14 pts, net -0.86 pts
+cell (30, 60): 1,623 trades, gross -0.34 pts, net -1.34 pts
+cell (50, 100): 1,265 trades, gross +1.82 pts, net +0.82 pts
+
+====================================================================================================
+P(PASS) of an MFFU Builder evaluation - real LVN x CVD signals, no overlay
+====================================================================================================
+     cell | 25K  2MNQ | 25K  5MNQ | 25K 10MNQ | 25K 20MNQ | 50K  2MNQ | 50K  5MNQ | 50K 10MNQ | 50K 20MNQ
+ (30, 30) |    13.80% |    19.60% |    25.40% |    18.60% |     4.20% |    14.20% |    19.40% |    24.00%
+ (20, 40) |    14.20% |    23.00% |    26.40% |    35.80% |     7.00% |    16.00% |    22.80% |    25.60%
+ (30, 60) |    16.40% |    21.00% |    24.60% |    20.80% |    11.80% |    21.00% |    22.20% |    25.60%
+(50, 100) |    28.80% |    22.40% |    22.00% |    15.20% |    29.20% |    31.40% |    29.40% |    20.00%
+
+  Reference: a fee-free fair coin in these same barriers passes MLL/(MLL+target)
+  = 40% (25K and 50K default) or 33% (50K with the $1,500 add-on); MFFU's floor
+  lock at breakeven+100 nudges that a little higher.  Anything far below 40% is
+  (a) the $2 toll on every trade and (b) a signal whose own gross is negative.
+
+====================================================================================================
+ISOLATING THE TOLL - same runs with the 1 pt cost deleted (50K, 10 MNQ)
+====================================================================================================
+   (30, 30): with toll  23.00%   without toll  33.20%
+   (20, 40): with toll  24.20%   without toll  37.40%
+   (30, 60): with toll  23.40%   without toll  28.60%
+  (50, 100): with toll  29.00%   without toll  32.20%
+
+====================================================================================================
+WHAT THE ABSORPTION OVERLAY HAS TO BE WORTH (50K, 10 MNQ)
+====================================================================================================
+  overlay = it turns N pp of losing trades into winners (same timing, same
+  intraday dip).  Columns are the assumed overlay size.
+     cell |  0pp |  1pp |  2pp |  3pp |  4pp
+ (30, 30) |  22.4% |  24.2% |  26.2% |  28.6% |  31.9%
+ (20, 40) |  27.4% |  29.7% |  32.4% |  36.8% |  40.5%
+ (30, 60) |  27.1% |  25.8% |  27.6% |  30.5% |  33.5%
+(50, 100) |  30.8% |  31.5% |  31.8% |  32.2% |  32.5%
+
+  Cost per pass = fee / P(pass)  (50K Builder list $153, often discounted).
+  The overlay is the user's MotiveWave overlay, assumed here - never measured.
+
+====================================================================================================
+GATE 2 - the sim-funded account: P(reach the first payout)  (10 MNQ, 60 K cap)
+====================================================================================================
+  funded starts at $0, floor -MLL trailing up to $0; first payout needs
+  buffer+500 = $2,600 (50K) / buffer+250 = $1,350 (25K).  10 MNQ.
+     cell |   25K fund |   50K fund |  50K: attempts per PAYOUT
+ (30, 30) |      27.1% |      24.8% |                      20.6   (pass 20% x payout 25%)
+ (20, 40) |      31.2% |      29.5% |                      12.9   (pass 26% x payout 30%)
+ (30, 60) |      27.8% |      26.6% |                      14.9   (pass 25% x payout 27%)
+(50, 100) |      24.9% |      31.5% |                      11.1   (pass 28% x payout 32%)
+
+  Two gates must both be cleared, each one paying the $2 toll.  Cost per payout
+  = fee x attempts-per-payout.  5 payouts are needed to reach the live seat; this
+  is only the first one, and the qualifying-day / buffer rules are not modelled.
