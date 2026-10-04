@@ -1,0 +1,21 @@
+sample                               |       n  res%  win|res |   gross     net |          CI(net)
+BOX  arr & div                       |   2,532  47%   52.6% |  +2.22  +1.22 | [-2.85,+5.12]
+ctrl div, NO level                   |  55,384  33%   49.3% |  -0.82  -1.82 | [-2.99,-0.67]
+BOX  arr & div & highflow            |     552  43%   52.7% |  +3.09  +2.09 | [-5.45,+8.55]
+ctrl div & highflow, NO level        |   7,380  32%   49.2% |  -0.60  -1.60 | [-3.77,+0.29]
+ctrl highflow, no div, NO level      |  69,124  37%   49.1% |  -0.49  -1.49 | [-2.67,-0.28]
+BOX  arr & div & div20               |     624  41%   53.3% |  +4.01  +3.01 | [-3.91,+9.86]
+ctrl div & div20, NO level           |  14,137  28%   47.5% |  -1.47  -2.47 | [-4.61,-0.44]
+ctrl every minute                    | 388,224  39%   49.6% |  -0.43  -1.43 | [-2.01,-0.85]
+ctrl every minute & highflow         |  82,474  37%   49.1% |  -0.45  -1.45 | [-2.63,-0.30]
+ctrl every minute & NOT highflow     | 305,750  40%   49.7% |  -0.43  -1.43 | [-2.03,-0.82]
+
+EDGE OF THE BOX OVER ITS MATCHED CONTROL (net pts)
+  arr & div                minus div only                    +2.95 pts  CI [ -0.83, +6.81]
+  arr & div & highflow     minus div & highflow, no level    +3.54 pts  CI [ -3.39, +9.89]
+  arr & div & div20        minus div & div20, no level       +5.27 pts  CI [ -1.16,+11.71]
+
+resolved vs unresolved inside the base box
+  base box           resolved n=1,181 P&L  +5.17 | unresolved n=1,351 mark  -0.35 | gross  +2.22
+  base + highflow    resolved n=  239 P&L  +5.44 | unresolved n=  313 mark  +1.30 | gross  +3.09
+  base + div20       resolved n=  257 P&L  +6.61 | unresolved n=  367 mark  +2.19 | gross  +4.01
