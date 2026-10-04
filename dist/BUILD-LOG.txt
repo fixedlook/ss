@@ -1,0 +1,4 @@
+built: 2026-10-04T11:19:08Z
+jdk:   javac 21.0.12.1
+
+--- javac output (-Xlint:all) ---
