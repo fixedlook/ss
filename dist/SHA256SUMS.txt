@@ -1,2 +1,2 @@
-2e0e7b24c5fa87e90622dddb25966e4a41abb59bd278eec2e983b557e7280b24  dist/MNQ-CvdDivergence.jar
-4072f129f612e62dab57d81d16bba5ec6d4aaaf8fc7561692a4062c3ca939af7  dist/MNQ-BidAskExporter.jar
+b29ff18b204db7152b57e31da48d77d3f35c077e6e518e0255485a0357453c6a  dist/MNQ-CvdDivergence.jar
+039c4511aecf4efe7cac6427f4a57542de70be3b5b4018d91cfe17bf1ae2869e  dist/MNQ-BidAskExporter.jar
