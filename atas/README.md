@@ -211,6 +211,7 @@ Set **Copy Local = False** on each. Build, then install the DLL as above.
 | `Could not find your ATAS install automatically` | See *Finding your ATAS folder* below |
 | `Found the ATAS INSTALLER, not the platform` | The `ATASPlatform.exe` in your Downloads only installs ATAS. Run it, finish setup, then build again |
 | `The type or namespace name 'RenderPen' does not exist` | Add `using OFT.Rendering.Tools;` at the top of `SsDrawOnLiquidity.cs` |
+| `error NETSDK1045: The current .NET SDK does not support targeting .NET 10.0` | Your platform needs .NET 10 but you have the .NET 8 SDK. An SDK can build its own version or older, never newer. Install `winget install Microsoft.DotNet.SDK.10`, reopen the terminal, build again |
 | `MSB3277` / framework mismatch | Wrong .NET target — read `tfm` from `OFT.Platform.runtimeconfig.json` in your ATAS folder and build with `-p:AtasTfm=net10.0-windows` (or `net8.0-windows`) |
 | Builds, but nothing draws | Chart must be inside RTH (see the setting), and it needs enough history for prior-day levels to exist |
 | Indicator missing from the list | Wrong folder for your version — use the table above, or the **Add custom indicator** button |

@@ -326,6 +326,34 @@ if (-not $dotnetCmd -or -not $sdks) {
 Write-Ok 'installed SDKs:'
 foreach ($line in $sdks) { Write-Host "      $line" }
 
+# An SDK can target its own framework version or lower, never higher. ATAS X
+# runs .NET 10, so a .NET 8 SDK cannot build for it - catch that here rather than
+# letting the user meet NETSDK1045 from the compiler.
+$tfmMajor = 0
+if ($tfm -match '^net(\d+)\.') { $tfmMajor = [int]$Matches[1] }
+
+$maxSdkMajor = 0
+foreach ($line in $sdks) {
+    if ($line -match '^\s*(\d+)\.') {
+        $m = [int]$Matches[1]
+        if ($m -gt $maxSdkMajor) { $maxSdkMajor = $m }
+    }
+}
+
+if ($tfmMajor -gt 0 -and $maxSdkMajor -gt 0 -and $maxSdkMajor -lt $tfmMajor) {
+    Write-Host ''
+    Write-Host "Your platform runs .NET $tfmMajor, but the newest SDK installed is .NET $maxSdkMajor." -ForegroundColor Red
+    Write-Host "An SDK can only build for its own version or older, so this would fail." -ForegroundColor Red
+    Write-Host ''
+    Write-Host 'Install the matching SDK, then open a NEW terminal window:' -ForegroundColor White
+    Write-Host ''
+    Write-Host "    winget install Microsoft.DotNet.SDK.$tfmMajor" -ForegroundColor White
+    Write-Host ''
+    Write-Host 'Then run this script again.' -ForegroundColor White
+    Write-Host ''
+    exit 1
+}
+
 # ------------------------------------------------------------------ 4. build
 Write-Step 'Building'
 
