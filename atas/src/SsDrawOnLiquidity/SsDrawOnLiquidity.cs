@@ -153,6 +153,8 @@ public class SsDrawOnLiquidity : Indicator
 	private TimeSpan _londonStart = new(3, 0, 0);
 	private int _ibMinutes = 60;
 	private bool _showOnlyInRth = true;
+	private decimal _sessionOffsetHours;
+	private bool _showDiagnostics;
 
 	private Color _targetColor = Color.FromArgb(120, 255, 90);
 	private Color _zoneColor = Color.FromArgb(38, 120, 255, 90);
@@ -286,11 +288,32 @@ public class SsDrawOnLiquidity : Indicator
 	[Display(Name = "Only show during RTH", GroupName = "Sessions", Order = 360,
 		Description = "The probability table was fitted on regular-hours data only. " +
 			"Outside RTH the displayed probability would not be calibrated, so targets " +
-			"are hidden by default.")]
+			"are hidden by default. While hidden, the chart explains why.")]
 	public bool ShowOnlyInRth
 	{
 		get => _showOnlyInRth;
 		set { _showOnlyInRth = value; RecalculateValues(); }
+	}
+
+	[Display(Name = "Session offset from New York (hours)", GroupName = "Sessions", Order = 370,
+		Description = "Session times above are New York times. If your chart is not on New York " +
+			"time, set the difference here: London +5, Berlin/Paris/Rome +6, Dubai +8, " +
+			"Singapore +12 (adjust by 1 in winter when US daylight saving differs). " +
+			"Leave 0 if your chart runs on New York time.")]
+	[Range(-12, 14)]
+	public decimal SessionOffsetHours
+	{
+		get => _sessionOffsetHours;
+		set { _sessionOffsetHours = value; RecalculateValues(); }
+	}
+
+	[Display(Name = "Show diagnostics", GroupName = "Sessions", Order = 380,
+		Description = "Prints the detected session, level count and chosen target on the chart. " +
+			"Useful when nothing appears.")]
+	public bool ShowDiagnostics
+	{
+		get => _showDiagnostics;
+		set { _showDiagnostics = value; RecalculateValues(); }
 	}
 
 	#endregion
@@ -329,9 +352,15 @@ public class SsDrawOnLiquidity : Indicator
 		var tick = TickSize;
 
 		// ---------------- session classification ----------------
-		var isAsia = tod >= _asiaStart || tod < _londonStart;
-		var isLondon = tod >= _londonStart && tod < _rthStart;
-		var isRth = tod >= _rthStart && tod < _rthEnd;
+		// session settings are New York times; shift them onto the chart clock
+		var asiaStart = Shift(_asiaStart);
+		var londonStart = Shift(_londonStart);
+		var rthStart = Shift(_rthStart);
+		var rthEnd = Shift(_rthEnd);
+
+		var isAsia = tod >= asiaStart || tod < londonStart;
+		var isLondon = tod >= londonStart && tod < rthStart;
+		var isRth = tod >= rthStart && tod < rthEnd;
 		// measured in wall-clock minutes so the indicator behaves identically on
 		// any chart timeframe, matching how the probabilities were fitted
 		var isIb = isRth && _rthStartTime != DateTime.MinValue
@@ -397,7 +426,7 @@ public class SsDrawOnLiquidity : Indicator
 	}
 
 	private DateTime TradingDay(DateTime time, TimeSpan tod)
-		=> tod >= _asiaStart ? time.Date.AddDays(1) : time.Date;
+		=> tod >= Shift(_asiaStart) ? time.Date.AddDays(1) : time.Date;
 
 	private void RollDay(DateTime td)
 	{
@@ -720,8 +749,15 @@ public class SsDrawOnLiquidity : Indicator
 
 	protected override void OnRender(RenderContext context, DrawingLayouts layout)
 	{
-		if (ChartInfo is null || _active.Count == 0)
+		if (ChartInfo is null)
 			return;
+
+		// Never leave the trader staring at a blank chart with no explanation.
+		if (_active.Count == 0)
+		{
+			DrawStatus(context, StatusMessage(), false);
+			return;
+		}
 
 		var tick = TickSize;
 		var region = Container.Region;
@@ -773,7 +809,81 @@ public class SsDrawOnLiquidity : Indicator
 			var dist = Math.Abs(l.Price - e);
 			DrawCallout(context, right, y, l, i + 1, Pot(l, dist), primary);
 		}
+
+		if (_showDiagnostics)
+			DrawStatus(context, DiagnosticMessage(), true);
 	}
+
+	/// <summary>
+	/// Plain-language explanation of why nothing (or something) is being drawn.
+	/// Every early-return path in this indicator sets a state that shows up here,
+	/// so a blank chart always has a stated reason.
+	/// </summary>
+	private string StatusMessage()
+	{
+		if (_lastCalculatedBar < 0 || InstrumentInfo is null)
+			return "SS Draw On Liquidity: waiting for bars...";
+
+		var chartTime = GetCandle(_lastCalculatedBar).Time;
+
+		if (_rthStartBar < 0)
+		{
+			var from = Clock(Shift(_rthStart));
+			var to = Clock(Shift(_rthEnd));
+			return "SS Draw On Liquidity: no regular-session bars in view yet (chart clock "
+				+ Clock(chartTime) + "). RTH is set to " + from + "-" + to
+				+ " on this chart clock. If your chart is not on New York time, set "
+				+ "'Session offset from New York'.";
+		}
+
+		if (_showOnlyInRth && !_lastBarInRth)
+			return "SS Draw On Liquidity: outside regular trading hours (chart clock "
+				+ Clock(chartTime) + "). Targets are hidden because the probabilities are "
+				+ "fitted on RTH only - untick 'Only show during RTH' to display them anyway.";
+
+		var needed = _minRr * _stopPoints;
+		return "SS Draw On Liquidity: in session, but no unswept level clears your minimum R:R "
+			+ "(needs " + _minRr.ToString("0.##") + " x " + _stopPoints.ToString("0.#")
+			+ " = " + needed.ToString("0.#") + " points). Lower 'Minimum R:R' or widen the stop.";
+	}
+
+	/// <summary>Diagnostic overlay: exactly what the indicator currently believes.</summary>
+	private string DiagnosticMessage()
+	{
+		var candle = GetCandle(_lastCalculatedBar);
+		var e = candle.Close;
+
+		var dir = "auto";
+		if (_directionMode == TradeDirectionMode.Short)
+			dir = "short";
+		else if (_directionMode == TradeDirectionMode.Long)
+			dir = "long";
+
+		var best = "no target";
+		if (_active.Count > 0)
+		{
+			var pot = Pot(_active[0], Math.Abs(_active[0].Price - e));
+			best = _active[0].Name + " @ " + _active[0].Price.ToString("0.##")
+				+ " (" + (pot * 100f).ToString("F1") + "%)";
+		}
+
+		return "chart " + Clock(candle.Time)
+			+ " | rth " + (_lastBarInRth ? "in" : "out")
+			+ " | dir " + dir
+			+ " | stop " + _stopPoints.ToString("0.#")
+			+ " | minRR " + _minRr.ToString("0.##")
+			+ " | levels " + _active.Count.ToString()
+			+ " | swings " + _swings.Count.ToString()
+			+ " | gaps " + _fvgs.Count.ToString()
+			+ " | best " + best;
+	}
+
+	/// <summary>hh:mm on the chart clock, without relying on a format specifier.</summary>
+	private static string Clock(TimeSpan t)
+		=> t.Hours.ToString("00") + ":" + t.Minutes.ToString("00");
+
+	private static string Clock(DateTime t)
+		=> t.Hour.ToString("00") + ":" + t.Minute.ToString("00");
 
 	/// <summary>
 	/// Dashes drawn as explicit segments. Deliberately avoids any dash-style API
@@ -840,6 +950,23 @@ public class SsDrawOnLiquidity : Indicator
 	/// <summary>Rejects the MinValue/MaxValue sentinels used for "no data yet".</summary>
 	private static bool IsReal(decimal price)
 		=> price > 0m && price != decimal.MinValue && price != decimal.MaxValue;
+
+	/// <summary>
+	/// Converts a New York session time into the chart's own clock.
+	/// Session settings are entered as New York times because that is how the
+	/// fitted data and every published session definition are expressed. A chart
+	/// running on another timezone must shift them, or the session levels are
+	/// computed from the wrong bars entirely.
+	/// </summary>
+	private TimeSpan Shift(TimeSpan nyTime)
+	{
+		if (_sessionOffsetHours == 0m)
+			return nyTime;
+
+		var mins = nyTime.TotalMinutes + (double)_sessionOffsetHours * 60.0;
+		mins = ((mins % 1440.0) + 1440.0) % 1440.0;
+		return TimeSpan.FromMinutes(mins);
+	}
 
 	#endregion
 }

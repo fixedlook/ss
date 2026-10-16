@@ -237,7 +237,21 @@ Set **Copy Local = False** on each. Build, then install the DLL as above.
 
 **Detection** — swing strength (fractal K), max stored levels.
 
-**Sessions** — RTH start/end, Asia start, London start, IB length (minutes).
+**Sessions**
+
+| Setting | Default | Notes |
+|---|---|---|
+| RTH start / end | 09:30 / 16:00 | **New York times.** |
+| Asia start | 18:00 | New York time. |
+| London start | 03:00 | New York time. |
+| Initial balance (minutes) | 60 | From the RTH open. |
+| Session offset from New York (hours) | 0 | **Set this if your chart is not on New York time** (Rome +6, London +5, Dubai +8, Singapore +12). Otherwise the session levels are computed from the wrong bars. |
+| Only show during RTH | on | Targets hide outside RTH because the probabilities are fitted on RTH only. While hidden, the chart says so. |
+| Show diagnostics | off | Prints session state, level counts and the chosen target on the chart. |
+
+> **Nothing showing up?** The indicator now tells you why. A banner appears
+> explaining the state: waiting for session data, hidden because it is outside
+> RTH, or no level clearing your minimum R:R.
 
 > ⚠️ **Session times are read from your chart's clock.** If your chart is not in
 > US Eastern time, set these to match it, or the overnight/Asia/London levels
