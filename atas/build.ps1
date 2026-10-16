@@ -101,10 +101,19 @@ function Find-AtasFolder {
     $candidates = New-Object System.Collections.ArrayList
     [void]$candidates.Add('C:\Program Files (x86)\ATAS Platform')
     [void]$candidates.Add('C:\Program Files\ATAS Platform')
+    [void]$candidates.Add('C:\Program Files\ATAS X')
     [void]$candidates.Add('C:\ATAS Platform')
+    [void]$candidates.Add('C:\ATAS X')
     if ($env:LOCALAPPDATA) {
         [void]$candidates.Add((Join-Path $env:LOCALAPPDATA 'Programs\ATAS Platform'))
         [void]$candidates.Add((Join-Path $env:LOCALAPPDATA 'ATAS Platform'))
+        [void]$candidates.Add((Join-Path $env:LOCALAPPDATA 'Programs\ATAS X'))
+        [void]$candidates.Add((Join-Path $env:LOCALAPPDATA 'ATAS X'))
+    }
+    if ($env:USERPROFILE) {
+        # ATAS X is sometimes kept as a portable folder in Downloads
+        [void]$candidates.Add((Join-Path $env:USERPROFILE 'Downloads\ATAS X'))
+        [void]$candidates.Add((Join-Path $env:USERPROFILE 'Downloads\ATAS Platform'))
     }
 
     # every filesystem drive root, in case the platform was put somewhere unusual
@@ -232,6 +241,14 @@ if (-not $atas) {
     exit 1
 }
 
+$isAtasX = $false
+try {
+    if (Test-Path -LiteralPath (Join-Path $atas 'OFT.PlatformX.runtimeconfig.json')) { $isAtasX = $true }
+    elseif ($atas -match 'ATAS X') { $isAtasX = $true }
+}
+catch { }
+
+if ($isAtasX) { Write-Ok "platform: ATAS X" } else { Write-Ok "platform: classic ATAS" }
 Write-Ok "ATAS folder: $atas"
 
 if ($FindOnly) { exit 0 }
@@ -240,9 +257,19 @@ if ($FindOnly) { exit 0 }
 Write-Step 'Checking your platform .NET version'
 
 $tfm = 'net8.0-windows'
-$rcPath = Join-Path $atas 'OFT.Platform.runtimeconfig.json'
 
-if (Test-Path $rcPath) {
+# Classic ATAS ships OFT.Platform.runtimeconfig.json; ATAS X ships
+# OFT.PlatformX.runtimeconfig.json. Check both.
+$rcCandidates = @(
+    (Join-Path $atas 'OFT.PlatformX.runtimeconfig.json'),
+    (Join-Path $atas 'OFT.Platform.runtimeconfig.json')
+)
+$rcPath = $null
+foreach ($cand in $rcCandidates) {
+    if (Test-Path -LiteralPath $cand) { $rcPath = $cand; break }
+}
+
+if ($rcPath) {
     try {
         $rc = Get-Content $rcPath -Raw | ConvertFrom-Json
         $raw = $null
@@ -265,7 +292,7 @@ if (Test-Path $rcPath) {
     }
 }
 else {
-    Write-Warn2 "OFT.Platform.runtimeconfig.json not found; defaulting to $tfm"
+    Write-Warn2 "no OFT.Platform*.runtimeconfig.json found; defaulting to $tfm"
 }
 
 # ---------------------------------------------------------------- 3. check SDK
@@ -348,8 +375,14 @@ Write-Step 'Installing into ATAS'
 
 $targets = New-Object System.Collections.ArrayList
 if ($env:APPDATA) {
-    [void]$targets.Add((Join-Path $env:APPDATA 'ATAS\Indicators'))
-    [void]$targets.Add((Join-Path $env:APPDATA 'ATAS X\Indicators'))
+    if ($isAtasX) {
+        [void]$targets.Add((Join-Path $env:APPDATA 'ATAS X\Indicators'))
+        [void]$targets.Add((Join-Path $env:APPDATA 'ATAS\Indicators'))
+    }
+    else {
+        [void]$targets.Add((Join-Path $env:APPDATA 'ATAS\Indicators'))
+        [void]$targets.Add((Join-Path $env:APPDATA 'ATAS X\Indicators'))
+    }
 }
 $docs = [Environment]::GetFolderPath('MyDocuments')
 if ($docs) { [void]$targets.Add((Join-Path $docs 'ATAS\Indicators')) }
