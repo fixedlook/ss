@@ -1,72 +1,174 @@
 <#
     build.ps1 - build and install the SS Draw On Liquidity ATAS indicator.
 
-    Does the whole job:
-      1. finds your ATAS install folder
-      2. reads OFT.Platform.runtimeconfig.json to learn whether your platform
-         runs .NET 8 or .NET 10 (the version shown in the platform's corner does
-         NOT tell you this)
-      3. checks a .NET SDK is present
-      4. builds the indicator
-      5. copies the DLL into your ATAS indicators folder
+    Finds your ATAS install, works out whether the platform runs .NET 8 or
+    .NET 10, checks a .NET SDK is present, builds the indicator, and copies the
+    DLL into the right ATAS indicators folder.
+
+    If it cannot find ATAS, it tells you the one command to fix that.
 
     Usage:
       .\build.ps1
       .\build.ps1 -AtasPlatformDir "D:\ATAS Platform"
       .\build.ps1 -NoInstall
+      .\build.ps1 -FindOnly          (just report where ATAS is)
 #>
 
 [CmdletBinding()]
 param(
     [string] $AtasPlatformDir,
-    [switch] $NoInstall
+    [switch] $NoInstall,
+    [switch] $FindOnly
 )
 
 $ErrorActionPreference = 'Stop'
 
-function Write-Step($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
-function Write-Ok($msg)   { Write-Host "    $msg" -ForegroundColor Green }
-function Write-Warn2($msg){ Write-Host "    $msg" -ForegroundColor Yellow }
+function Write-Step($msg)  { Write-Host "==> $msg" -ForegroundColor Cyan }
+function Write-Ok($msg)    { Write-Host "    $msg" -ForegroundColor Green }
+function Write-Warn2($msg) { Write-Host "    $msg" -ForegroundColor Yellow }
 
-# ---------------------------------------------------------------- 1. find ATAS
-Write-Step 'Locating ATAS'
+# --------------------------------------------------------------- ATAS finding
+
+function Test-AtasFolder {
+    <#
+        Returns the folder that actually contains ATAS.Indicators.dll, or $null.
+        Accepts either the install root or the Bin subfolder, because different
+        ATAS builds place the assemblies in either.
+    #>
+    param([string] $Path)
+
+    if (-not $Path) { return $null }
+
+    $candidates = @($Path, (Join-Path $Path 'Bin'))
+    foreach ($c in $candidates) {
+        if (-not $c) { continue }
+        if (Test-Path -LiteralPath $c -PathType Container) {
+            if (Test-Path -LiteralPath (Join-Path $c 'ATAS.Indicators.dll')) {
+                return (Resolve-Path -LiteralPath $c).Path
+            }
+        }
+    }
+    return $null
+}
 
 function Find-AtasFolder {
     param([string] $Hint)
 
+    # 0. explicit hint wins
+    if ($Hint) {
+        $hit = Test-AtasFolder $Hint
+        if ($hit) { Write-Ok "using your -AtasPlatformDir: $hit"; return $hit }
+        Write-Warn2 "-AtasPlatformDir '$Hint' does not contain ATAS.Indicators.dll; still looking"
+    }
+
+    # 1. a running ATAS process is the most reliable hint of all
+    try {
+        $procs = Get-Process -ErrorAction SilentlyContinue |
+                 Where-Object { $_.Path -and ($_.ProcessName -match 'ATAS|OFT') }
+        foreach ($p in $procs) {
+            $hit = Test-AtasFolder (Split-Path -Parent $p.Path)
+            if ($hit) { Write-Ok "found via running process '$($p.ProcessName)': $hit"; return $hit }
+        }
+    }
+    catch { }
+
+    # 2. registry uninstall entries
+    $regRoots = @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall',
+        'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall'
+    )
+    foreach ($root in $regRoots) {
+        try {
+            foreach ($item in (Get-ChildItem -LiteralPath $root -ErrorAction SilentlyContinue)) {
+                $props = Get-ItemProperty -LiteralPath $item.PSPath -ErrorAction SilentlyContinue
+                if (-not $props -or -not $props.DisplayName) { continue }
+                if ($props.DisplayName -notmatch 'ATAS') { continue }
+
+                foreach ($cand in @($props.InstallLocation, $props.DisplayIcon)) {
+                    if (-not $cand) { continue }
+                    $dir = $cand.Trim('"')
+                    if (Test-Path -LiteralPath $dir -PathType Leaf) { $dir = Split-Path -Parent $dir }
+                    $hit = Test-AtasFolder $dir
+                    if ($hit) { Write-Ok "found via registry ('$($props.DisplayName)'): $hit"; return $hit }
+                }
+            }
+        }
+        catch { }
+    }
+
+    # 3. the usual places
     $candidates = New-Object System.Collections.ArrayList
-    if ($Hint) { [void]$candidates.Add($Hint) }
     [void]$candidates.Add('C:\Program Files (x86)\ATAS Platform')
     [void]$candidates.Add('C:\Program Files\ATAS Platform')
+    [void]$candidates.Add('C:\ATAS Platform')
+    [void]$candidates.Add('D:\ATAS Platform')
+    [void]$candidates.Add('D:\Program Files\ATAS Platform')
     if ($env:LOCALAPPDATA) {
         [void]$candidates.Add((Join-Path $env:LOCALAPPDATA 'Programs\ATAS Platform'))
         [void]$candidates.Add((Join-Path $env:LOCALAPPDATA 'ATAS Platform'))
     }
-
     foreach ($c in $candidates) {
-        if (-not $c) { continue }
-        if (Test-Path (Join-Path $c 'ATAS.Indicators.dll')) { return $c }
+        $hit = Test-AtasFolder $c
+        if ($hit) { Write-Ok "found in a standard location: $hit"; return $hit }
     }
+
+    # 4. bounded recursive search of the big application folders
+    $searchRoots = New-Object System.Collections.ArrayList
+    if ($env:ProgramFiles) { [void]$searchRoots.Add($env:ProgramFiles) }
+    if (${env:ProgramFiles(x86)}) { [void]$searchRoots.Add(${env:ProgramFiles(x86)}) }
+    if ($env:LOCALAPPDATA) { [void]$searchRoots.Add((Join-Path $env:LOCALAPPDATA 'Programs')) }
+
+    foreach ($root in $searchRoots) {
+        if (-not (Test-Path -LiteralPath $root)) { continue }
+        Write-Warn2 "searching $root (may take a moment)..."
+        try {
+            $found = Get-ChildItem -LiteralPath $root -Filter 'ATAS.Indicators.dll' -Recurse -ErrorAction SilentlyContinue -Force
+            $file = $found | Select-Object -First 1
+            if ($file) {
+                $hit = Split-Path -Parent $file.FullName
+                Write-Ok "found by searching: $hit"
+                return $hit
+            }
+        }
+        catch { }
+    }
+
     return $null
 }
+
+# --------------------------------------------------------------------- 1. ATAS
+Write-Step 'Locating ATAS'
 
 $atas = Find-AtasFolder -Hint $AtasPlatformDir
 
 if (-not $atas) {
     Write-Host ''
-    Write-Host 'Could not find your ATAS install folder.' -ForegroundColor Red
-    Write-Host 'It must be the folder that contains ATAS.Indicators.dll.' -ForegroundColor Red
+    Write-Host 'Could not find your ATAS install automatically.' -ForegroundColor Red
     Write-Host ''
-    Write-Host 'Find it by copying this into the Windows search box / Explorer address bar:'
-    Write-Host '    ATAS.Indicators.dll' -ForegroundColor White
+    Write-Host 'Fastest way to find it - if ATAS is currently running:' -ForegroundColor White
+    Write-Host '    1. press Ctrl+Shift+Esc to open Task Manager'
+    Write-Host '    2. find the ATAS process, right-click it'
+    Write-Host '    3. choose "Open file location"'
+    Write-Host '    4. copy that folder from the Explorer address bar'
     Write-Host ''
-    Write-Host 'Then run:'
-    Write-Host '    .\build.ps1 -AtasPlatformDir "C:\path\to\that\folder"' -ForegroundColor White
+    Write-Host 'Or run this in PowerShell to print the folder:' -ForegroundColor White
+    Write-Host '    Get-Process | Where-Object { $_.ProcessName -match "ATAS|OFT" } | Select-Object ProcessName, Path'
+    Write-Host ''
+    Write-Host 'Or search for the file itself in Explorer (paste into the search box on This PC):' -ForegroundColor White
+    Write-Host '    ATAS.Indicators.dll'
+    Write-Host ''
+    Write-Host 'Then build with:' -ForegroundColor White
+    Write-Host '    build.bat -AtasPlatformDir "C:\folder\you\found"' -ForegroundColor White
+    Write-Host ''
     exit 1
 }
-Write-Ok "found: $atas"
 
-# ------------------------------------------------------- 2. work out framework
+Write-Ok "ATAS folder: $atas"
+
+if ($FindOnly) { exit 0 }
+
+# ------------------------------------------------------------- 2. framework
 Write-Step 'Checking your platform .NET version'
 
 $tfm = 'net8.0-windows'
@@ -84,7 +186,7 @@ if (Test-Path $rcPath) {
         }
         if ($raw -and ($raw -match '^net(\d+)\.(\d+)')) {
             $tfm = "net$($Matches[1]).$($Matches[2])-windows"
-            Write-Ok "runtimeconfig says '$raw' -> targeting $tfm"
+            Write-Ok "runtimeconfig says '$raw' - targeting $tfm"
         }
         else {
             Write-Warn2 "could not parse '$raw'; defaulting to $tfm"
@@ -98,11 +200,11 @@ else {
     Write-Warn2 "OFT.Platform.runtimeconfig.json not found; defaulting to $tfm"
 }
 
-# ------------------------------------------------------------- 3. check SDK
+# ---------------------------------------------------------------- 3. check SDK
 Write-Step 'Checking for the .NET SDK'
 
 # Get-Command first: if dotnet is absent entirely, invoking it would throw a
-# terminating error and we would never reach the readable message below.
+# terminating error and the readable message below would never print.
 $dotnetCmd = Get-Command dotnet -ErrorAction SilentlyContinue
 
 $sdks = $null
@@ -115,7 +217,7 @@ if (-not $dotnetCmd -or -not $sdks) {
     Write-Host 'No .NET SDK found - you only have the .NET runtime.' -ForegroundColor Red
     Write-Host 'The runtime runs programs; the SDK is what compiles them.' -ForegroundColor Red
     Write-Host ''
-    Write-Host 'Install it with either of these, then open a NEW terminal:' -ForegroundColor White
+    Write-Host 'Install one, then open a NEW terminal window:' -ForegroundColor White
     Write-Host ''
     Write-Host '    winget install Microsoft.DotNet.SDK.8' -ForegroundColor White
     Write-Host '        (or)'
@@ -152,8 +254,9 @@ $buildArgs = @(
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host ''
-    Write-Host 'Build failed. The errors above are the useful part; paste them back and' -ForegroundColor Red
-    Write-Host 'they can be fixed. Most common cause: wrong .NET target for your platform.' -ForegroundColor Red
+    Write-Host 'Build failed. The errors above are the useful part - paste them back' -ForegroundColor Red
+    Write-Host 'and they can be fixed. Most common cause: wrong .NET target for your' -ForegroundColor Red
+    Write-Host 'platform. Force it with:  build.bat -AtasTfm net10.0-windows' -ForegroundColor Red
     exit $LASTEXITCODE
 }
 
@@ -169,25 +272,36 @@ Write-Ok "built: $dll"
 if ($NoInstall) {
     Write-Host ''
     Write-Host 'Skipped installing (-NoInstall).' -ForegroundColor Yellow
-    Write-Host 'Install it in ATAS with: indicators window -> Add custom indicator -> pick the DLL above.'
+    Write-Host 'Install with: indicators window -> Add custom indicator -> pick the DLL above.'
     exit 0
 }
 
 Write-Step 'Installing into ATAS'
 
 $targets = New-Object System.Collections.ArrayList
-if ($env:APPDATA) { [void]$targets.Add((Join-Path $env:APPDATA 'ATAS\Indicators')) }
+if ($env:APPDATA) {
+    [void]$targets.Add((Join-Path $env:APPDATA 'ATAS\Indicators'))
+    [void]$targets.Add((Join-Path $env:APPDATA 'ATAS X\Indicators'))
+}
 $docs = [Environment]::GetFolderPath('MyDocuments')
 if ($docs) { [void]$targets.Add((Join-Path $docs 'ATAS\Indicators')) }
 
+# prefer a folder that already exists, so we do not invent the wrong one
 $dest = $null
 foreach ($t in $targets) {
-    if (Test-Path $t) { $dest = $t; break }
+    if (Test-Path -LiteralPath $t -PathType Container) { $dest = $t; break }
 }
 if (-not $dest -and $targets.Count -gt 0) {
     $dest = $targets[0]
-    New-Item -ItemType Directory -Path $dest -Force | Out-Null
-    Write-Warn2 "created $dest"
+    try {
+        New-Item -ItemType Directory -Path $dest -Force | Out-Null
+        Write-Warn2 "created $dest"
+    }
+    catch {
+        Write-Host "Could not create $dest" -ForegroundColor Yellow
+        Write-Host "Copy this file there by hand: $dll"
+        exit 0
+    }
 }
 
 if (-not $dest) {
@@ -196,7 +310,7 @@ if (-not $dest) {
     exit 0
 }
 
-Copy-Item -Path $dll -Destination $dest -Force
+Copy-Item -LiteralPath $dll -Destination $dest -Force
 Write-Ok "installed to: $dest"
 
 Write-Host ''
