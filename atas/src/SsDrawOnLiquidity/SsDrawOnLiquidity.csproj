@@ -3,38 +3,43 @@
   <!--
     SS Draw On Liquidity — ATAS custom indicator.
 
-    Two ways to use this file:
+    You normally do not need to edit this file: run build.bat (or build.ps1),
+    which finds the ATAS folder, works out your platform's .NET version and
+    calls this project with the right settings.
 
-      A) Open it directly (no solution needed):
-           dotnet build SsDrawOnLiquidity.csproj
-         The DLL lands in bin\Debug\<framework>\ and can be installed with the
-         platform's "Add custom indicator" button.
+    Manual build:
+      dotnet build -c Release -p:AtasPlatformDir="C:\Program Files (x86)\ATAS Platform"
 
-      B) Copy the two .cs files into your existing ATAS indicators project and
-         ignore this file entirely.
-
-    Framework: run dotnet --info or read the "tfm" value in
-    OFT.Platform.runtimeconfig.json inside your ATAS install folder, then keep
-    whichever of the two targets below matches. Multitargeting is the default
-    because ATAS ships both .NET 8 and .NET 10 builds and the version number in
-    the platform's corner does NOT tell you which one you have.
+    Overrides:
+      -p:AtasPlatformDir=<folder>   where ATAS is installed
+      -p:AtasTfm=net10.0-windows    if your platform runs .NET 10 instead of 8
   -->
   <PropertyGroup>
-    <TargetFrameworks>net8.0-windows;net10.0-windows</TargetFrameworks>
+    <AtasTfm Condition="'$(AtasTfm)' == ''">net8.0-windows</AtasTfm>
+    <TargetFramework>$(AtasTfm)</TargetFramework>
+
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
+
     <AssemblyName>SsDrawOnLiquidity</AssemblyName>
     <RootNamespace>ATAS.Indicators.Technical</RootNamespace>
     <EnableDefaultCompileItems>true</EnableDefaultCompileItems>
+
+    <!-- keep the DLL directly in bin\Release so it is easy to find -->
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+
     <AtasPlatformDir Condition="'$(AtasPlatformDir)' == ''">C:\Program Files (x86)\ATAS Platform</AtasPlatformDir>
   </PropertyGroup>
 
   <!--
-    ATAS assemblies are loaded by the platform at runtime, so they must never be
-    copied into the output folder (Private=false / Copy Local=False).
+    ATAS ships its own assemblies, and the platform loads them at runtime, so
+    they must never be copied into the output folder (Private=false).
+
+    ATAS.Indicators.dll and OFT.Rendering.dll are required. The others are
+    referenced only if your install actually has them, so a missing optional
+    file cannot break the build.
   -->
   <ItemGroup>
     <Reference Include="ATAS.Indicators">
@@ -45,18 +50,27 @@
       <HintPath>$(AtasPlatformDir)\OFT.Rendering.dll</HintPath>
       <Private>false</Private>
     </Reference>
-    <Reference Include="OFT.Localization">
-      <HintPath>$(AtasPlatformDir)\OFT.Localization.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="OFT.Attributes">
+
+    <Reference Include="OFT.Attributes" Condition="Exists('$(AtasPlatformDir)\OFT.Attributes.dll')">
       <HintPath>$(AtasPlatformDir)\OFT.Attributes.dll</HintPath>
       <Private>false</Private>
     </Reference>
-    <Reference Include="Utils.Common">
+    <Reference Include="OFT.Localization" Condition="Exists('$(AtasPlatformDir)\OFT.Localization.dll')">
+      <HintPath>$(AtasPlatformDir)\OFT.Localization.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Utils.Common" Condition="Exists('$(AtasPlatformDir)\Utils.Common.dll')">
       <HintPath>$(AtasPlatformDir)\Utils.Common.dll</HintPath>
       <Private>false</Private>
     </Reference>
   </ItemGroup>
+
+  <!-- Fail early with a readable message instead of a wall of CS0246 errors. -->
+  <Target Name="CheckAtasReferences" BeforeTargets="BeforeCompile">
+    <Error Condition="!Exists('$(AtasPlatformDir)\ATAS.Indicators.dll')"
+           Text="ATAS.Indicators.dll was not found in '$(AtasPlatformDir)'. Pass your real install folder, e.g. dotnet build -p:AtasPlatformDir=&quot;D:\ATAS Platform&quot;" />
+    <Error Condition="!Exists('$(AtasPlatformDir)\OFT.Rendering.dll')"
+           Text="OFT.Rendering.dll was not found in '$(AtasPlatformDir)'. This file ships with ATAS; check the folder is the platform install directory and not a subfolder." />
+  </Target>
 
 </Project>

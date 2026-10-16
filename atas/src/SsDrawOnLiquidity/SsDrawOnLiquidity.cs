@@ -41,11 +41,8 @@ using System.ComponentModel.DataAnnotations;
 using System.Drawing;
 using System.Linq;
 
-using ATAS.Indicators.Drawing;
-
 using OFT.Attributes;
 using OFT.Rendering.Context;
-using OFT.Rendering.Helpers;
 using OFT.Rendering.Tools;
 
 using Color = System.Drawing.Color;
