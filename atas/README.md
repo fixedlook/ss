@@ -44,23 +44,75 @@ Two results from the research (`docs/FINDINGS.md`) dictated the design:
 
 ## Install
 
-1. In Visual Studio, create a **Class Library** project (or open your existing
-   ATAS indicators solution).
-2. Add both source files:
+### 1. Create the project
+
+**Option A — use the included project file**
+
+```bash
+cd atas/src/SsDrawOnLiquidity
+dotnet build SsDrawOnLiquidity.csproj
+```
+
+If your ATAS is not in `C:\Program Files (x86)\ATAS Platform`, pass it:
+
+```bash
+dotnet build SsDrawOnLiquidity.csproj -p:AtasPlatformDir="D:\ATAS Platform"
+```
+
+**Option B — Visual Studio**
+
+1. **File → New → Project → Class Library** (C#), targeting **.NET 8** or
+   **.NET 10** — see the framework note below.
+2. Delete the generated `Class1.cs`, then add:
    - `src/SsDrawOnLiquidity/SsDrawOnLiquidity.cs`
    - `src/SsDrawOnLiquidity/PotTable.cs`
-3. Add references to the ATAS assemblies, from your ATAS install folder
-   (typically `C:\Program Files (x86)\ATAS Platform\`):
-   - `ATAS.Indicators.dll`
+3. Right-click **Dependencies → Add Project Reference → Browse** and pick these
+   from your ATAS install folder:
+   - `ATAS.Indicators.dll` (required)
    - `OFT.Rendering.dll`, `OFT.Localization.dll`, `OFT.Attributes.dll`
-   - plus whatever your ATAS version's own sample indicators reference
-4. Build, then copy the resulting `.dll` to
-   `Documents\ATAS\Indicators\`.
-5. Restart ATAS. The indicator appears as **SS Draw On Liquidity**.
+   - `Utils.Common.dll` (only needed if you add logging)
+   - Set **Copy Local = False** on all of them — ATAS loads these itself.
+4. **Build → Build Solution** (Ctrl+Shift+B). Expect `1 succeeded` and one
+   warning we deliberately allow (see Troubleshooting).
 
-`SSDrawOnLiquidity.csproj` is included as a starting point — point
-`AtasPlatformDir` at your install folder, or just copy the two `.cs` files into
-your own solution.
+### 2. Framework version — the one thing that trips people up
+
+The target framework must match the .NET runtime your ATAS runs on (.NET 8 or
+.NET 10), and **the version number in the bottom-right corner of the platform
+does not tell you which**. The reliable way:
+
+> Open `OFT.Platform.runtimeconfig.json` in your ATAS install folder and read the
+> `tfm` value — e.g. `net10.0` means target .NET 10.
+
+The included `.csproj` sidesteps this by building for both at once, so you can
+just install whichever output matches.
+
+### 3. Install the DLL
+
+**Recommended:** in ATAS, open the indicators window, click **Add custom
+indicator** (bottom-left), and select your built `.dll`. It loads immediately —
+no restart.
+
+**Manual copy:** put the DLL in the indicators folder:
+
+| ATAS version | Folder |
+|---|---|
+| Current (8.x and newer) | `%APPDATA%\ATAS\Indicators` — e.g. `C:\Users\<you>\AppData\Roaming\ATAS\Indicators` |
+| Older (up to 7.0.7) | `Documents\ATAS\Indicators` |
+
+Then press Ctrl+I on a chart and look for **SS Draw On Liquidity** under the
+**SS** category.
+
+### Troubleshooting
+
+| Symptom | Cause / fix |
+|---|---|
+| `The type or namespace name 'RenderPen' does not exist` | Add `using OFT.Rendering.Tools;` |
+| Errors about `Color` / colour pickers | Keep `<UseWPF>true</UseWPF>` in the csproj |
+| Indicator missing from the list after copying a DLL | Wrong folder for your version — use the table above, or the **Add custom indicator** button |
+| Builds but nothing draws | Chart must be inside RTH (see the setting), and you need enough history on the chart for prior-day levels to exist |
+| Runtime exception | Check the log files in `…\ATAS\Logs` next to the indicators folder |
+| `MSB3277` / framework mismatch | You targeted the wrong .NET — check `tfm` as described above |
 
 ## Settings
 

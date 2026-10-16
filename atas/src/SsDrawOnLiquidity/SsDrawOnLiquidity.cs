@@ -814,9 +814,12 @@ public class SsDrawOnLiquidity : Indicator
 		var s1 = context.MeasureString(line1, font);
 		var s2 = context.MeasureString(line2, font);
 
+		// MeasureString does not hand back ints, and Rectangle takes ints
 		var pad = 7;
+		var line1H = (int)s1.Height;
+		var line2H = (int)s2.Height;
 		var w = Math.Max((int)s1.Width, (int)s2.Width) + pad * 2;
-		var h = s1.Height + s2.Height + pad * 2;
+		var h = line1H + line2H + pad * 2;
 
 		var box = new Rectangle(right - w - 6, y - h / 2, w, h);
 
@@ -824,9 +827,9 @@ public class SsDrawOnLiquidity : Indicator
 		context.DrawRectangle(new RenderPen(_targetColor, 1), box);
 
 		context.DrawString(line1, font, _targetColor,
-			new Rectangle(box.X + pad, box.Y + pad, w - pad * 2, s1.Height), _left);
+			new Rectangle(box.X + pad, box.Y + pad, w - pad * 2, line1H), _left);
 		context.DrawString(line2, font, _textColor,
-			new Rectangle(box.X + pad, box.Y + pad + s1.Height, w - pad * 2, s2.Height), _left);
+			new Rectangle(box.X + pad, box.Y + pad + line1H, w - pad * 2, line2H), _left);
 	}
 
 	#endregion

@@ -3,24 +3,39 @@
   <!--
     SS Draw On Liquidity — ATAS custom indicator.
 
-    Point AtasPlatformDir at your ATAS installation, or simply add the two .cs
-    files to your existing ATAS indicators project and ignore this file.
+    Two ways to use this file:
 
-    Target framework: ATAS 3.x runs on .NET; if your build complains about the
-    framework version, match whatever your ATAS version's own sample indicators
-    use (check the project file shipped with the platform samples).
+      A) Open it directly (no solution needed):
+           dotnet build SsDrawOnLiquidity.csproj
+         The DLL lands in bin\Debug\<framework>\ and can be installed with the
+         platform's "Add custom indicator" button.
+
+      B) Copy the two .cs files into your existing ATAS indicators project and
+         ignore this file entirely.
+
+    Framework: run dotnet --info or read the "tfm" value in
+    OFT.Platform.runtimeconfig.json inside your ATAS install folder, then keep
+    whichever of the two targets below matches. Multitargeting is the default
+    because ATAS ships both .NET 8 and .NET 10 builds and the version number in
+    the platform's corner does NOT tell you which one you have.
   -->
   <PropertyGroup>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <TargetFrameworks>net8.0-windows;net10.0-windows</TargetFrameworks>
+    <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
     <AssemblyName>SsDrawOnLiquidity</AssemblyName>
     <RootNamespace>ATAS.Indicators.Technical</RootNamespace>
     <EnableDefaultCompileItems>true</EnableDefaultCompileItems>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <AtasPlatformDir Condition="'$(AtasPlatformDir)' == ''">C:\Program Files (x86)\ATAS Platform</AtasPlatformDir>
   </PropertyGroup>
 
+  <!--
+    ATAS assemblies are loaded by the platform at runtime, so they must never be
+    copied into the output folder (Private=false / Copy Local=False).
+  -->
   <ItemGroup>
     <Reference Include="ATAS.Indicators">
       <HintPath>$(AtasPlatformDir)\ATAS.Indicators.dll</HintPath>
