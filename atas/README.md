@@ -72,24 +72,63 @@ dotnet --list-sdks
 You should see a version line. If that errors, the SDK isn't installed or the
 terminal wasn't restarted.
 
-### Step 2 — download the code
+### Step 2 — get the files
 
-Download and extract this ZIP (no Git needed):
+> **Paste the link into your web browser, not into Command Prompt.**
+> A URL is an address, not a command. Typing it into a terminal gives
+> `'https:' is not recognized as an internal or external command`.
 
-**<https://github.com/fixedlook/ss/archive/refs/heads/arena/9aa27356-ss.zip>**
+**Option A - browser (simplest).** Paste this into Chrome/Edge:
 
-You'll get a folder like `ss-arena-9aa27356-ss\atas\`. Extract it somewhere easy,
-such as `C:\Users\<you>\ss\`.
+```
+https://github.com/fixedlook/ss/archive/refs/heads/arena/9aa27356-ss.zip
+```
+
+It is about **115 MB**, because the repository also holds your MNQ market-data
+files. It is not stuck: the five files this indicator needs are only 43 KB, but
+the archive contains everything.
+
+Once downloaded: right-click the ZIP, choose **Extract All**. You get a folder
+named `ss-arena-9aa27356-ss`.
+
+**Option B - grab only what's needed (43 KB total).** Paste this whole block into
+**PowerShell** (search the Start menu for "PowerShell"):
+
+```powershell
+$r = 'https://raw.githubusercontent.com/fixedlook/ss/arena/9aa27356-ss/atas'
+$d = "$env:USERPROFILE\ss\atas"
+New-Item -ItemType Directory -Force -Path "$d\src\SsDrawOnLiquidity" | Out-Null
+$files = @(
+  'build.ps1',
+  'src/SsDrawOnLiquidity/SsDrawOnLiquidity.cs',
+  'src/SsDrawOnLiquidity/PotTable.cs',
+  'src/SsDrawOnLiquidity/SsDrawOnLiquidity.csproj'
+)
+foreach ($f in $files) {
+  $out = Join-Path $d ($f -replace '/', '\')
+  Invoke-WebRequest "$r/$f" -OutFile $out
+}
+Write-Host "Downloaded to $d" -ForegroundColor Green
+```
+
+That puts everything in `C:\Users\<you>\ss\atas`, with no extraction step.
 
 ### Step 3 — build and install
 
-Open the `atas` folder and **double-click `build.bat`**.
+**If you used Option A:** open the `atas` folder inside `ss-arena-9aa27356-ss`
+and **double-click `build.bat`**.
 
-It finds your ATAS install, works out your platform's .NET version, builds the
-indicator, and copies the DLL into your ATAS indicators folder — printing what it
-did at each step.
+**If you used Option B:** in the same PowerShell window run:
 
-If it can't find ATAS, it tells you how to pass the path:
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\ss\atas\build.ps1"
+```
+
+Either way the script finds your ATAS install, works out your platform's .NET
+version, builds the indicator, and copies the DLL into your ATAS indicators
+folder, printing what it did at each step.
+
+If it cannot find ATAS, it tells you exactly how to pass the path:
 
 ```bat
 build.bat -AtasPlatformDir "D:\ATAS Platform"

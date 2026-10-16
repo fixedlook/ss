@@ -1,5 +1,5 @@
 /*
- * SsDrawOnLiquidity — ATAS custom indicator
+ * SsDrawOnLiquidity - ATAS custom indicator
  * ---------------------------------------------------------------------------
  * Shows the highest-probability draw-on-liquidity target for the trade you are
  * currently in, with an empirically calibrated probability of touch (PoT).
@@ -26,7 +26,7 @@
  *   swing         confirmed 3-bar fractal highs/lows
  *   fvg           3-bar fair value gaps, unfilled
  *
- * IMPORTANT — session times
+ * IMPORTANT - session times
  *   Session boundaries are read from your chart's own bar timestamps. If your
  *   chart is not in US Eastern time, set the session parameters below to match
  *   your chart's clock or the overnight/Asia/London levels will be wrong.

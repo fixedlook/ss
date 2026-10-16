@@ -1,5 +1,5 @@
 <#
-    build.ps1 — build and install the SS Draw On Liquidity ATAS indicator.
+    build.ps1 - build and install the SS Draw On Liquidity ATAS indicator.
 
     Does the whole job:
       1. finds your ATAS install folder
@@ -101,12 +101,18 @@ else {
 # ------------------------------------------------------------- 3. check SDK
 Write-Step 'Checking for the .NET SDK'
 
-$sdks = $null
-try { $sdks = & dotnet --list-sdks 2>$null } catch { $sdks = $null }
+# Get-Command first: if dotnet is absent entirely, invoking it would throw a
+# terminating error and we would never reach the readable message below.
+$dotnetCmd = Get-Command dotnet -ErrorAction SilentlyContinue
 
-if (-not $sdks) {
+$sdks = $null
+if ($dotnetCmd) {
+    try { $sdks = & dotnet --list-sdks 2>$null } catch { $sdks = $null }
+}
+
+if (-not $dotnetCmd -or -not $sdks) {
     Write-Host ''
-    Write-Host 'No .NET SDK found — you only have the .NET runtime.' -ForegroundColor Red
+    Write-Host 'No .NET SDK found - you only have the .NET runtime.' -ForegroundColor Red
     Write-Host 'The runtime runs programs; the SDK is what compiles them.' -ForegroundColor Red
     Write-Host ''
     Write-Host 'Install it with either of these, then open a NEW terminal:' -ForegroundColor White
@@ -126,7 +132,8 @@ foreach ($line in $sdks) { Write-Host "      $line" }
 # ------------------------------------------------------------------ 4. build
 Write-Step 'Building'
 
-$root = Split-Path -Parent $MyInvocation.MyCommand.Path
+$root = $PSScriptRoot
+if (-not $root) { $root = Split-Path -Parent $MyInvocation.MyCommand.Path }
 $proj = Join-Path $root 'src\SsDrawOnLiquidity\SsDrawOnLiquidity.csproj'
 
 if (-not (Test-Path $proj)) {
@@ -135,7 +142,13 @@ if (-not (Test-Path $proj)) {
     exit 1
 }
 
-& dotnet build $proj -c Release -p:AtasPlatformDir="$atas" -p:AtasTfm="$tfm"
+$buildArgs = @(
+    'build', $proj,
+    '-c', 'Release',
+    "-p:AtasPlatformDir=$atas",
+    "-p:AtasTfm=$tfm"
+)
+& dotnet @buildArgs
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host ''

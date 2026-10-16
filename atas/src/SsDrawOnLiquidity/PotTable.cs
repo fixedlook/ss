@@ -1,5 +1,5 @@
 /*
- * PotTable — fitted probability-of-touch table. GENERATED, do not hand-edit.
+ * PotTable - fitted probability-of-touch table. GENERATED, do not hand-edit.
  *
  * Source : 1,460 MNQ trading days (2019-07 .. 2026-09), 4,193,607 observations.
  * Label  : target touched BEFORE the stop is hit, same-bar ambiguity scored as

@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    SS Draw On Liquidity — ATAS custom indicator.
+    SS Draw On Liquidity - ATAS custom indicator.
 
     You normally do not need to edit this file: run build.bat (or build.ps1),
     which finds the ATAS folder, works out your platform's .NET version and
