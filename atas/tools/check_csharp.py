@@ -75,6 +75,55 @@ def collect_declared(text):
     return names
 
 
+# Names that are resolved outside this file: BCL types, ATAS Indicator members,
+# and attribute / constructor invocations that merely look like calls.
+_EXTERNAL_CALLS = {
+    # BCL
+    "Math", "MathF", "Convert", "String", "ToString", "Array", "Tuple", "Func",
+    "Action", "Nullable", "Environment", "DateTime", "TimeSpan", "Enumerable",
+    "StringBuilder", "ArgumentException", "Console", "Enum", "Type", "Object",
+    "Rectangle", "Point", "Size", "List", "Dictionary",
+    # ATAS Indicator surface used here
+    "RecalculateValues", "GetCandle", "SubscribeToDrawingEvents", "OnCalculate",
+    "OnRender", "OnInitialize", "IsNewSession", "Add", "Clear", "Contains",
+    # attributes and constructors
+    "Category", "Description", "Display", "DisplayName", "Range", "HelpLink",
+    "RenderPen", "RenderFont", "RenderStringFormat", "PenSettings",
+}
+
+_CALL_KEYWORDS = {
+    "if", "for", "foreach", "while", "switch", "return", "using", "catch",
+    "lock", "fixed", "sizeof", "typeof", "nameof", "new", "case", "do",
+    "else", "get", "set", "throw", "when", "yield", "base", "this",
+}
+
+
+def find_unresolved_calls(text):
+    """
+    Unqualified calls (no preceding dot) that have no definition in the file and
+    are not known platform/BCL members. Qualified calls are ignored because their
+    existence depends on external types this checker cannot see.
+    """
+    no_block = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    no_line = re.sub(r"//[^\n]*", "", no_block)
+    no_str = re.sub(r'"(?:[^"\\]|\\.)*"', '""', no_line)
+
+    defined = set(re.findall(
+        r"\b(?:private|public|protected|internal|static|sealed|override|async|\s)+"
+        r"[A-Za-z_][\w<>\[\],\.\?]*\s+([A-Za-z_]\w*)\s*\(", no_str))
+    defined |= set(re.findall(
+        r"[A-Za-z_][\w<>\[\],\.\?]*\s+([A-Za-z_]\w*)\s*\n\s*=>", no_str))
+    defined |= set(re.findall(r"\bvoid\s+([A-Za-z_]\w*)\s*\(", no_str))
+    defined |= set(re.findall(r"\(([A-Za-z_]\w*)\)\s*=>", no_str))
+
+    calls = re.findall(r"(?<![\w\.])([A-Za-z_]\w*)\s*\(", no_str)
+
+    return sorted({c for c in calls
+                   if c not in defined
+                   and c not in _EXTERNAL_CALLS
+                   and c not in _CALL_KEYWORDS})
+
+
 def main():
     files = sorted(SRC.glob("*.cs"))
     if not files:
@@ -139,7 +188,15 @@ def main():
         if unused:
             print(f"  [warn] declared but never used: {unused}")
 
-        # 5. interpolation sanity
+        # 5. called methods must exist somewhere resolvable
+        unresolved = find_unresolved_calls(text)
+        if unresolved:
+            failures += 1
+            print(f"  [FAIL] called but not defined in this file: {unresolved}")
+        else:
+            print("  [ok] every unqualified method call resolves")
+
+        # 6. interpolation sanity
         for m in re.finditer(r'\$"([^"]*)"', text):
             body = m.group(1)
             if body.count("{") != body.count("}"):

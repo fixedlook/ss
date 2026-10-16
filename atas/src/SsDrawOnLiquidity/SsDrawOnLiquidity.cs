@@ -360,7 +360,7 @@ public class SsDrawOnLiquidity : Indicator
 		if (td != _currentDay)
 			RollDay(td);
 
-		var tick = TickSize;
+		var tick = TickStep;
 
 		// ---------------- session classification ----------------
 		// session settings are New York times; shift them onto the chart clock
@@ -626,7 +626,7 @@ public class SsDrawOnLiquidity : Indicator
 		if (_showOnlyInRth && !_lastBarInRth)
 			return;
 
-		var tick = TickSize;
+		var tick = TickStep;
 		var e = GetCandle(_lastCalculatedBar).Close;
 		var stop = Math.Max(_stopPoints, tick);
 
@@ -784,7 +784,7 @@ public class SsDrawOnLiquidity : Indicator
 			return;
 		}
 
-		var tick = TickSize;
+		var tick = TickStep;
 		var region = Container.Region;
 		var right = region.Right;
 		var high = ChartInfo.PriceChartContainer.High;
@@ -917,6 +917,32 @@ public class SsDrawOnLiquidity : Indicator
 		=> t.Hour.ToString("00") + ":" + t.Minute.ToString("00");
 
 	/// <summary>
+	/// Small dark banner across the top-left of the panel, used both to explain a
+	/// blank chart and to show diagnostics.
+	/// </summary>
+	private void DrawStatus(RenderContext context, string message, bool primary)
+	{
+		if (string.IsNullOrEmpty(message))
+			return;
+
+		var region = Container.Region;
+		var font = primary ? _fontSmall : _font;
+		var measured = context.MeasureString(message, font);
+		var textW = (int)measured.Width;
+		var textH = (int)measured.Height;
+
+		var w = Math.Min(textW + 16, Math.Max(region.Width - 8, 60));
+		var h = textH + 10;
+
+		var box = new Rectangle(region.X + 4, region.Y + 4, w, h);
+
+		context.FillRectangle(Color.FromArgb(215, 12, 16, 14), box);
+		context.DrawRectangle(new RenderPen(Color.FromArgb(120, _targetColor), 1), box);
+		context.DrawString(message, font, _textColor,
+			new Rectangle(box.X + 8, box.Y + 5, Math.Max(box.Width - 16, 10), textH), _left);
+	}
+
+	/// <summary>
 	/// Dashes drawn as explicit segments. Deliberately avoids any dash-style API
 	/// on the pen so the indicator does not depend on a signature that varies
 	/// between platform versions.
@@ -975,7 +1001,7 @@ public class SsDrawOnLiquidity : Indicator
 	#region Helpers
 
 	/// <summary>Instrument tick, without assuming the property's numeric type.</summary>
-	private decimal TickSize
+	private decimal TickStep
 		=> InstrumentInfo is null ? 0.25m : (decimal)InstrumentInfo.TickSize;
 
 	/// <summary>Rejects the MinValue/MaxValue sentinels used for "no data yet".</summary>
