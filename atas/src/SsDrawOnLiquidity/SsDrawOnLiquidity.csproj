@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    SS Draw On Liquidity — ATAS custom indicator.
+
+    Point AtasPlatformDir at your ATAS installation, or simply add the two .cs
+    files to your existing ATAS indicators project and ignore this file.
+
+    Target framework: ATAS 3.x runs on .NET; if your build complains about the
+    framework version, match whatever your ATAS version's own sample indicators
+    use (check the project file shipped with the platform samples).
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <AssemblyName>SsDrawOnLiquidity</AssemblyName>
+    <RootNamespace>ATAS.Indicators.Technical</RootNamespace>
+    <EnableDefaultCompileItems>true</EnableDefaultCompileItems>
+    <AtasPlatformDir Condition="'$(AtasPlatformDir)' == ''">C:\Program Files (x86)\ATAS Platform</AtasPlatformDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="ATAS.Indicators">
+      <HintPath>$(AtasPlatformDir)\ATAS.Indicators.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="OFT.Rendering">
+      <HintPath>$(AtasPlatformDir)\OFT.Rendering.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="OFT.Localization">
+      <HintPath>$(AtasPlatformDir)\OFT.Localization.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="OFT.Attributes">
+      <HintPath>$(AtasPlatformDir)\OFT.Attributes.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Utils.Common">
+      <HintPath>$(AtasPlatformDir)\Utils.Common.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>
