@@ -213,7 +213,8 @@ Set **Copy Local = False** on each. Build, then install the DLL as above.
 | `The type or namespace name 'RenderPen' does not exist` | Add `using OFT.Rendering.Tools;` at the top of `SsDrawOnLiquidity.cs` |
 | `error NETSDK1045: The current .NET SDK does not support targeting .NET 10.0` | Your platform needs .NET 10 but you have the .NET 8 SDK. An SDK can build its own version or older, never newer. Install `winget install Microsoft.DotNet.SDK.10`, reopen the terminal, build again |
 | `MSB3277` / framework mismatch | Wrong .NET target — read `tfm` from `OFT.Platform.runtimeconfig.json` in your ATAS folder and build with `-p:AtasTfm=net10.0-windows` (or `net8.0-windows`) |
-| Builds, but nothing draws | Chart must be inside RTH (see the setting), and it needs enough history for prior-day levels to exist |
+| Builds, but nothing draws | The indicator now prints the reason on the chart. If it prints nothing at all, `SubscribeToDrawingEvents` is missing from the constructor - without it the platform never calls `OnRender`, so the indicator calculates correctly but paints nothing |
+| Draws only outside RTH, or vice versa | Check the "Only show during RTH" setting, and confirm your chart's timezone matches the session settings |
 | Indicator missing from the list | Wrong folder for your version — use the table above, or the **Add custom indicator** button |
 | Runtime exception | Check logs in `…\ATAS\Logs` next to the indicators folder |
 

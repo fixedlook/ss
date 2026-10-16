@@ -117,6 +117,11 @@ public class SsDrawOnLiquidity : Indicator
 	private decimal _sessHigh = decimal.MinValue, _sessLow = decimal.MaxValue;
 	private decimal _sessHighPrev = decimal.MinValue, _sessLowPrev = decimal.MaxValue;
 
+	// Running extremes across the WHOLE trading day, overnight included. Used as
+	// the "already swept" reference before RTH opens, so pre-market targets are
+	// not levels that were already taken out overnight.
+	private decimal _dayHigh = decimal.MinValue, _dayLow = decimal.MaxValue;
+
 	// --- level store --------------------------------------------------------
 	private readonly List<Level> _swings = new();
 	private readonly List<Level> _fvgs = new();
@@ -326,6 +331,12 @@ public class SsDrawOnLiquidity : Indicator
 		DenyToChangePanel = true;
 		DataSeries[0].IsHidden = true;
 		((ValueDataSeries)DataSeries[0]).VisualType = VisualMode.Hide;
+
+		// Without this subscription the platform never calls OnRender, so the
+		// indicator loads and calculates correctly but paints nothing at all.
+		// Every official indicator that overrides OnRender subscribes here.
+		SubscribeToDrawingEvents(
+			DrawingLayouts.LatestBar | DrawingLayouts.Historical | DrawingLayouts.Final);
 	}
 
 	#endregion
@@ -376,6 +387,9 @@ public class SsDrawOnLiquidity : Indicator
 		}
 
 		// ---------------- accumulate session extremes ----------------
+		if (candle.High > _dayHigh) _dayHigh = candle.High;
+		if (candle.Low < _dayLow) _dayLow = candle.Low;
+
 		if (isRth)
 		{
 			if (candle.High > _rthHigh) _rthHigh = candle.High;
@@ -447,6 +461,7 @@ public class SsDrawOnLiquidity : Indicator
 		_ibHigh = decimal.MinValue; _ibLow = decimal.MaxValue;
 		_sessHigh = decimal.MinValue; _sessLow = decimal.MaxValue;
 		_sessHighPrev = decimal.MinValue; _sessLowPrev = decimal.MaxValue;
+		_dayHigh = decimal.MinValue; _dayLow = decimal.MaxValue;
 		_rthStartBar = -1;
 		_rthStartTime = DateTime.MinValue;
 		_swings.Clear();
@@ -573,6 +588,7 @@ public class SsDrawOnLiquidity : Indicator
 		_prevDayRthClose = decimal.MinValue;
 		_sessHigh = decimal.MinValue; _sessLow = decimal.MaxValue;
 		_sessHighPrev = decimal.MinValue; _sessLowPrev = decimal.MaxValue;
+		_dayHigh = decimal.MinValue; _dayLow = decimal.MaxValue;
 		_rthStartBar = -1; _rthStartTime = DateTime.MinValue;
 		_swings.Clear();
 		_fvgs.Clear();
@@ -600,11 +616,13 @@ public class SsDrawOnLiquidity : Indicator
 	{
 		_active.Clear();
 
-		if (_lastCalculatedBar < 3 || _rthStartBar < 0)
+		if (_lastCalculatedBar < 3)
 			return;
 
-		// the fitted numbers describe regular-hours behaviour; outside that
-		// window they are not calibrated
+		// The fitted numbers describe regular-hours behaviour; outside that window
+		// they are not calibrated, so they are hidden by default. This is the ONLY
+		// visibility gate, so the setting genuinely controls pre-market and
+		// overnight display.
 		if (_showOnlyInRth && !_lastBarInRth)
 			return;
 
@@ -616,15 +634,22 @@ public class SsDrawOnLiquidity : Indicator
 		{
 			TradeDirectionMode.Long => 1,
 			TradeDirectionMode.Short => -1,
-			// an indicator cannot read your position, so Auto reads the side of
-			// the session open; set Long/Short explicitly when in a trade
-			_ => _rthOpen > 0 && e >= _rthOpen ? 1 : -1
+			// an indicator cannot read your position, so Auto reads market
+			// context: the session open during RTH, otherwise the previous
+			// session's close. Set Long/Short explicitly when in a trade.
+			_ => AutoDirection(e)
 		};
 
-		// running RTH extremes INCLUDING the current bar: a level inside the
-		// current bar's range has already been touched
-		var hiSoFar = _sessHigh;
-		var loSoFar = _sessLow;
+		// "Already swept" reference. Inside RTH this is the RTH extreme, which is
+		// what the probabilities were fitted against. Before the open there is no
+		// RTH extreme yet, so the whole trading day is used instead, and levels
+		// already taken out overnight are not offered as fresh draws.
+		var inRth = _lastBarInRth && _sessHigh != decimal.MinValue;
+		var hiSoFar = inRth ? _sessHigh : _dayHigh;
+		var loSoFar = inRth ? _sessLow : _dayLow;
+
+		if (hiSoFar == decimal.MinValue || loSoFar == decimal.MaxValue)
+			return;
 
 		var all = new List<Level>();
 
@@ -826,23 +851,13 @@ public class SsDrawOnLiquidity : Indicator
 
 		var chartTime = GetCandle(_lastCalculatedBar).Time;
 
-		if (_rthStartBar < 0)
-		{
-			var from = Clock(Shift(_rthStart));
-			var to = Clock(Shift(_rthEnd));
-			return "SS Draw On Liquidity: no regular-session bars in view yet (chart clock "
-				+ Clock(chartTime) + "). RTH is set to " + from + "-" + to
-				+ " on this chart clock. If your chart is not on New York time, set "
-				+ "'Session offset from New York'.";
-		}
-
 		if (_showOnlyInRth && !_lastBarInRth)
 			return "SS Draw On Liquidity: outside regular trading hours (chart clock "
 				+ Clock(chartTime) + "). Targets are hidden because the probabilities are "
 				+ "fitted on RTH only - untick 'Only show during RTH' to display them anyway.";
 
 		var needed = _minRr * _stopPoints;
-		return "SS Draw On Liquidity: in session, but no unswept level clears your minimum R:R "
+		return "SS Draw On Liquidity: no unswept level clears your minimum R:R "
 			+ "(needs " + _minRr.ToString("0.##") + " x " + _stopPoints.ToString("0.#")
 			+ " = " + needed.ToString("0.#") + " points). Lower 'Minimum R:R' or widen the stop.";
 	}
@@ -876,6 +891,22 @@ public class SsDrawOnLiquidity : Indicator
 			+ " | swings " + _swings.Count.ToString()
 			+ " | gaps " + _fvgs.Count.ToString()
 			+ " | best " + best;
+	}
+
+	/// <summary>
+	/// Which side of the market is being read when the trader has not said.
+	/// During RTH this is the session open; before the open there is no session
+	/// open to compare with, so the previous session's close is used.
+	/// </summary>
+	private int AutoDirection(decimal price)
+	{
+		if (_rthOpen > 0m)
+			return price >= _rthOpen ? 1 : -1;
+
+		if (IsReal(_prevDayRthClose))
+			return price >= _prevDayRthClose ? 1 : -1;
+
+		return 1;
 	}
 
 	/// <summary>hh:mm on the chart clock, without relying on a format specifier.</summary>
