@@ -367,6 +367,28 @@ if (-not (Test-Path $proj)) {
     exit 1
 }
 
+# Report exactly what is about to be compiled. A stale download previously caused
+# the same compiler error twice with no way to tell which source was on disk.
+$srcFile = Join-Path $root 'src\SsDrawOnLiquidity\SsDrawOnLiquidity.cs'
+if (Test-Path $srcFile) {
+    $srcInfo = Get-Item $srcFile
+    $lineCount = (Get-Content $srcFile).Count
+    $hash = (Get-FileHash $srcFile -Algorithm SHA256).Hash.Substring(0, 12)
+    $modified = $srcInfo.LastWriteTime.ToString('yyyy-MM-dd HH:mm')
+    Write-Ok ("source: {0} lines, sha256 {1}, modified {2}" -f $lineCount, $hash, $modified)
+
+    # cheap sanity check so a truncated or stale file is caught before compiling
+    $hasStatus = Select-String -Path $srcFile -Pattern 'private void DrawStatus' -Quiet
+    $hasSubscribe = Select-String -Path $srcFile -Pattern 'SubscribeToDrawingEvents' -Quiet
+    if (-not $hasStatus -or -not $hasSubscribe) {
+        Write-Warn2 "this source looks incomplete or out of date:"
+        if (-not $hasStatus) { Write-Warn2 "  - DrawStatus is missing" }
+        if (-not $hasSubscribe) { Write-Warn2 "  - SubscribeToDrawingEvents is missing" }
+        Write-Warn2 "re-download it, then run this script again"
+        exit 1
+    }
+}
+
 $buildArgs = @(
     'build', $proj,
     '-c', 'Release',
