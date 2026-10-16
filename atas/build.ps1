@@ -102,15 +102,54 @@ function Find-AtasFolder {
     [void]$candidates.Add('C:\Program Files (x86)\ATAS Platform')
     [void]$candidates.Add('C:\Program Files\ATAS Platform')
     [void]$candidates.Add('C:\ATAS Platform')
-    [void]$candidates.Add('D:\ATAS Platform')
-    [void]$candidates.Add('D:\Program Files\ATAS Platform')
     if ($env:LOCALAPPDATA) {
         [void]$candidates.Add((Join-Path $env:LOCALAPPDATA 'Programs\ATAS Platform'))
         [void]$candidates.Add((Join-Path $env:LOCALAPPDATA 'ATAS Platform'))
     }
+
+    # every filesystem drive root, in case the platform was put somewhere unusual
+    try {
+        foreach ($drive in (Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue)) {
+            if ($drive.Root) {
+                [void]$candidates.Add((Join-Path $drive.Root 'ATAS Platform'))
+                [void]$candidates.Add((Join-Path $drive.Root 'Program Files\ATAS Platform'))
+            }
+        }
+    }
+    catch { }
+
     foreach ($c in $candidates) {
         $hit = Test-AtasFolder $c
         if ($hit) { Write-Ok "found in a standard location: $hit"; return $hit }
+    }
+
+    # 3b. the user's own folders. An ATAS folder inside Downloads or on the
+    #     Desktop is not standard, but it happens with a manually placed install.
+    $userRoots = New-Object System.Collections.ArrayList
+    if ($env:USERPROFILE) {
+        [void]$userRoots.Add($env:USERPROFILE)
+        foreach ($sub in @('Downloads', 'Desktop', 'Documents', 'Programs', 'Apps')) {
+            [void]$userRoots.Add((Join-Path $env:USERPROFILE $sub))
+        }
+    }
+
+    foreach ($root in $userRoots) {
+        if (-not (Test-Path -LiteralPath $root -PathType Container)) { continue }
+
+        $hit = Test-AtasFolder $root
+        if ($hit) { Write-Ok "found under your user folder: $hit"; return $hit }
+
+        Write-Warn2 "searching $root ..."
+        try {
+            $found = Get-ChildItem -LiteralPath $root -Filter 'ATAS.Indicators.dll' -Recurse -ErrorAction SilentlyContinue -Force
+            $file = $found | Select-Object -First 1
+            if ($file) {
+                $hit = Split-Path -Parent $file.FullName
+                Write-Ok "found by searching: $hit"
+                return $hit
+            }
+        }
+        catch { }
     }
 
     # 4. bounded recursive search of the big application folders
@@ -145,6 +184,35 @@ $atas = Find-AtasFolder -Hint $AtasPlatformDir
 if (-not $atas) {
     Write-Host ''
     Write-Host 'Could not find your ATAS install automatically.' -ForegroundColor Red
+
+    # common mix-up: the downloaded installer is present, but the platform itself
+    # has not been installed yet
+    $installer = $null
+    try {
+        $roots = New-Object System.Collections.ArrayList
+        if ($env:USERPROFILE) { [void]$roots.Add($env:USERPROFILE) }
+        foreach ($drive in (Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue)) {
+            if ($drive.Root) { [void]$roots.Add($drive.Root) }
+        }
+        foreach ($root in $roots) {
+            if (-not (Test-Path -LiteralPath $root)) { continue }
+            $installer = Get-ChildItem -LiteralPath $root -Filter 'ATASPlatform*.exe' -Recurse -ErrorAction SilentlyContinue -Force | Select-Object -First 1
+            if ($installer) { break }
+        }
+    }
+    catch { }
+
+    if ($installer) {
+        Write-Host ''
+        Write-Host 'Found the ATAS INSTALLER, not the platform:' -ForegroundColor Yellow
+        Write-Host "    $($installer.FullName)" -ForegroundColor White
+        Write-Host ''
+        Write-Host 'That file only installs ATAS. Run it, finish the installation,' -ForegroundColor White
+        Write-Host 'then run this script again.' -ForegroundColor White
+        Write-Host ''
+        exit 1
+    }
+
     Write-Host ''
     Write-Host 'Fastest way to find it - if ATAS is currently running:' -ForegroundColor White
     Write-Host '    1. press Ctrl+Shift+Esc to open Task Manager'

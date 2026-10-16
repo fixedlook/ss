@@ -155,6 +155,39 @@ no restart.
 Then press **Ctrl+I** on a chart and look for **SS Draw On Liquidity** under the
 **SS** category.
 
+### Finding your ATAS folder
+
+The build script looks in the standard locations, in the registry, at any running
+ATAS process, and then searches your user folders and Program Files. If it still
+cannot find it, run this in **PowerShell**:
+
+```powershell
+Get-Process | Where-Object { $_.ProcessName -match 'ATAS|OFT' } |
+    Select-Object ProcessName, Path
+```
+
+That prints the executable path of a running ATAS — the folder you want is the one
+containing it. If ATAS is closed, use this instead:
+
+```powershell
+Get-ChildItem "$env:USERPROFILE\Downloads","$env:USERPROFILE","C:\Program Files (x86)","C:\Program Files" `
+    -Filter ATAS.Indicators.dll -Recurse -ErrorAction SilentlyContinue |
+    Select-Object -ExpandProperty FullName
+```
+
+You want the folder that **contains `ATAS.Indicators.dll`** — that is what
+`-AtasPlatformDir` expects. If the file sits in a `Bin` subfolder, point at the
+`Bin` folder.
+
+Then:
+
+```bat
+build.bat -AtasPlatformDir "C:\Users\you\the\folder\you\found"
+```
+
+> If your search turns up `ATASPlatform.exe` but **not** `ATAS.Indicators.dll`,
+> you have the *installer* rather than the installed platform. Run it first.
+
 ### Using Visual Studio instead
 
 If you'd rather not use the command line: **New → Class Library (C#)**, delete
@@ -175,6 +208,8 @@ Set **Copy Local = False** on each. Build, then install the DLL as above.
 | `No .NET SDKs were found` | Only the runtime is installed — do Step 1, then restart the terminal |
 | `The system cannot find the path specified` | The repo isn't on your PC yet — do Step 2 |
 | `ATAS.Indicators.dll was not found in ...` | Wrong folder; pass `-AtasPlatformDir` pointing at the folder that *contains* that file |
+| `Could not find your ATAS install automatically` | See *Finding your ATAS folder* below |
+| `Found the ATAS INSTALLER, not the platform` | The `ATASPlatform.exe` in your Downloads only installs ATAS. Run it, finish setup, then build again |
 | `The type or namespace name 'RenderPen' does not exist` | Add `using OFT.Rendering.Tools;` at the top of `SsDrawOnLiquidity.cs` |
 | `MSB3277` / framework mismatch | Wrong .NET target — read `tfm` from `OFT.Platform.runtimeconfig.json` in your ATAS folder and build with `-p:AtasTfm=net10.0-windows` (or `net8.0-windows`) |
 | Builds, but nothing draws | Chart must be inside RTH (see the setting), and it needs enough history for prior-day levels to exist |
