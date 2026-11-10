@@ -73,7 +73,10 @@ export function layout(tree, links = [], opt = {}) {
   const spacing = opt.spacing == null ? 1 : opt.spacing; // user-facing "ring spacing"
   const perLevel = (opt.perLevel == null ? 7.5 : opt.perLevel) * spacing;
   const hoopScale = opt.hoopScale == null ? 0.85 : opt.hoopScale; // hoop size vs shell distance
-  const elevation = opt.elevation == null ? 1.35 : opt.elevation; // spread of hoop heights (rad)
+  const gap = (size) => (opt.gapBase == null ? 6.5 : opt.gapBase) + Math.sqrt(size) * 2.2 * spacing;
+  const childPad = (opt.childPad == null ? 4.5 : opt.childPad) * spacing;
+  const childStep = (opt.childStep == null ? 2.4 : opt.childStep) * spacing;
+  const L_minSep = (opt.minRadiusGap == null ? 2.6 : opt.minRadiusGap) * spacing;
 
   const nodes = tree.nodes;
   const folders = tree.order;
@@ -99,67 +102,91 @@ export function layout(tree, links = [], opt = {}) {
   };
   process(ROOT, start, TAU);
 
-  // --- 2. hoops: own bearing, own elevation, own orientation, own centre ----------------
+  // --- 2. rings: concentric, but every ring has its OWN RADIUS ------------------------------
+  // This is the whole trick. Two circles at the same radius in different planes always intersect at
+  // exactly two points (that was the "petals"/"atom" look). Two circles at different radii never
+  // intersect at all, so varied radii + varied orientation = a nest of orbits.
+  //
+  // Radii grow with note count, biggest folders innermost, and a child folder's ring sits just
+  // outside its parent's, so depth still reads outward.
   const rings = [];
   const ringOf = new Map();
+  const byLevelRings = new Map();
   for (const f of folders) {
-    const n = nodes.get(f);
-    const lv = n.level;
+    const lv = nodes.get(f).level;
+    if (!byLevelRings.has(lv)) byLevelRings.set(lv, []);
+    byLevelRings.get(lv).push(f);
+  }
+  const levelsSorted = [...byLevelRings.keys()].sort((a, b) => a - b);
 
-    // size of the hoop first: bigger folders get bigger hoops
-    const hoopR = clamp(perLevel * hoopScale * Math.sqrt(sizeOf(f)) * 1.15, perLevel * 0.7, perLevel * 3.4);
+  for (const lv of levelsSorted) {
+    const list = byLevelRings.get(lv);
+    // biggest folders innermost: they get the most visible rings
+    list.sort((a, b) => sizeOf(b) - sizeOf(a) || a.localeCompare(b));
 
-    // then push its centre out far enough that the hoop clears the core. This is the invariant that
-    // keeps rings off the hub: clearance = shellD - hoopR stays positive for every folder.
-    // shell distance must be strictly increasing per level, so level n+1 never sinks inside level n
-    const shellBase = coreRadius * 1.08 + (lv - 1) * (perLevel * 1.5) + perLevel * 0.9;
-    const shellD = shellBase + hoopR * 0.5 + unit("sd:" + f) * perLevel * 0.35;
+    let acc = 0;
+    list.forEach((f, i) => {
+      const n = nodes.get(f);
+      const size = sizeOf(f);
+      let R;
+      let offset = null;
+      if (lv === 1) {
+        if (i === 0) acc = coreRadius * 1.22;
+        R = acc + Math.sqrt(size) * 2.2;
+        acc = R + gap(size);
+      } else {
+        // children sit just outside their parent's ring, staggered among siblings
+        const parentRing = ringOf.get(n.parent);
+        const base = parentRing ? parentRing.radius : coreRadius * 2;
+        const sib = (tree.siblings.get(n.parent) || []).indexOf(f);
+        R = base + childPad + Math.max(0, sib) * childStep;
+        offset = base;
+      }
+      const ring = {
+        folder: f,
+        name: n.name,
+        radius: R,
+        level: lv,
+        parent: n.parent,
+        count: n.notes.length,
+        descendants: n.descendants,
+        arc: [n.wedge[0], n.wedge[1]],
+        // arbitrary 3D orientation. Pitch is kept away from 0 and 90 degrees so rings read as
+        // ellipses rather than flat lines or perfect circles.
+        rotX: 0.22 + unit("rx:" + f) * 1.05,
+        rotY: unit("ry:" + f) * TAU,
+        rotZ: (unit("rz:" + f) - 0.5) * 0.5,
+        spin: 0,
+        orbitSpeed: (unit("spin:" + f) - 0.5) * 0.6,
+        orbitPhase: unit("phase:" + f) * TAU,
+        // concentric: the ring's plane passes through the hub, which is fine at varied radii
+        cx: 0, cy: 0, cz: 0,
+        slot: -1,
+      };
+      // de-cluster: no two same-parent rings may share both radius and pitch
+      const sibs = (byLevelRings.get(lv) || []).filter((o) => o !== f && ringOf.has(o))
+        .map((o) => ringOf.get(o)).filter((o) => o.parent === n.parent);
+      for (let guard = 0; guard < 8; guard++) {
+        const clash = sibs.some((o) => Math.abs(o.radius - ring.radius) < 1.5 && Math.abs(o.rotX - ring.rotX) < 0.3);
+        if (!clash) break;
+        ring.rotX = 0.22 + (((ring.rotX - 0.22) / 1.05 + 0.618034) % 1) * 1.05;
+      }
+      if (sibs.length && unit("dir:" + f) < 0.5) ring.orbitSpeed = -ring.orbitSpeed;
+      rings.push(ring);
+      ringOf.set(f, ring);
+    });
+  }
 
-    // bearing: the middle of this folder's wedge, lightly jittered
-    const bearing = n.angle + (unit("bj:" + f) - 0.5) * 0.22;
-
-    // elevation: random per hoop, so they are scattered "all over the place" rather than in bands
-    const el = (unit("el:" + f) - 0.5) * elevation + (lv % 2 ? 0.12 : -0.12);
-
-    const cosEl = Math.cos(el);
-    const ring = {
-      folder: f,
-      name: n.name,
-      radius: hoopR,
-      shellD,
-      level: lv,
-      parent: n.parent,
-      count: n.notes.length,
-      descendants: n.descendants,
-      arc: [n.wedge[0], n.wedge[1]],
-      bearing,
-      elevation: el,
-      // three independent rotations: a genuinely arbitrary plane, not a tilt off flat
-      rotX: unit("rx:" + f) * Math.PI * 0.95,
-      rotY: unit("ry:" + f) * TAU,
-      rotZ: unit("rz:" + f) * Math.PI * 0.95,
-      spin: 0,
-      orbitSpeed: (unit("spin:" + f) - 0.5) * 0.5,
-      orbitPhase: unit("phase:" + f) * TAU,
-      cx: Math.cos(bearing) * cosEl * shellD,
-      cy: Math.sin(el) * shellD * 0.62,
-      cz: Math.sin(bearing) * cosEl * shellD,
-      slot: -1,
-    };
-
-    // de-cluster: no two same-parent hoops may share an orientation or a height band
-    const sibs = rings.filter((o) => o.parent === n.parent && o.level === lv);
-    for (let guard = 0; guard < 10; guard++) {
-      const clash = sibs.some((o) => Math.abs(o.cy - ring.cy) < shellD * 0.12
-        && Math.abs(((o.rotX - ring.rotX + Math.PI * 3) % TAU) - Math.PI) < 0.35);
-      if (!clash) break;
-      ring.rotX = (ring.rotX + 0.618034 * Math.PI) % Math.PI;
-      ring.cy += (unit("cy:" + f + guard) < 0.5 ? -1 : 1) * shellD * 0.16;
+  // --- 2b. guarantee a minimum radius separation across the whole nest -------------------
+  // Children of different parents can land on the same radius, which reintroduces intersection
+  // points. Walk outwards and nudge anything too close, keeping the level order intact.
+  {
+    const minSep = Math.max(2.2, L_minSep);
+    const ordered = rings.slice().sort((a, b) => a.radius - b.radius || a.level - b.level || a.folder.localeCompare(b.folder));
+    for (let i = 1; i < ordered.length; i++) {
+      const prev = ordered[i - 1], cur = ordered[i];
+      if (cur.radius - prev.radius < minSep) cur.radius = prev.radius + minSep + (unit("sep:" + cur.folder) - 0.5) * 0.4;
     }
-    if (sibs.length && unit("dir:" + f) < 0.5) ring.orbitSpeed = -ring.orbitSpeed;
-
-    rings.push(ring);
-    ringOf.set(f, ring);
   }
 
   // --- 3. slots: 0 = core, then notes, then folder hubs --------------------------------
@@ -266,56 +293,44 @@ export function ringPoints(ring, seg = 200, range) {
 
 /**
  * Belt-and-braces check used by the tests and a startup assert. Returns a list of problems.
- * The checks encode bugs that actually shipped: hoops through the hub, identical transforms,
- * a shell that does not sit outside its parent, non-finite transforms after a bad rotation.
+ * The checks encode bugs that actually shipped, in order of appearance:
+ *   1. every ring the same radius  -> circles intersect at exactly two points ("petals"/"atom")
+ *   2. every ring the same tilt    -> one flat disc
+ *   3. detached floating hoops     -> rings that never come near the hub look like soap bubbles
  */
 export function auditLayout(L, minGap = 1) {
   const problems = [];
   const { rings } = L;
-  const TAU = Math.PI * 2;
 
   for (const r of rings) {
-    if (![r.radius, r.rotX, r.rotY, r.rotZ, r.cx, r.cy, r.cz].every(Number.isFinite)) {
+    if (![r.radius, r.rotX, r.rotY, r.rotZ].every(Number.isFinite)) {
       problems.push(`ring ${r.folder} has a non-finite transform`);
       continue;
     }
-    const centreDist = Math.hypot(r.cx, r.cy, r.cz);
-    // nearest approach of the hoop to the hub; it must clear the core, or it reads as a great circle
-    if (centreDist - r.radius < L.coreRadius * 0.55) {
-      problems.push(`ring ${r.folder} passes through the core (${(centreDist - r.radius).toFixed(1)} vs core ${L.coreRadius})`);
-    }
+    if (r.radius <= L.coreRadius) problems.push(`ring ${r.folder} is inside the core (${r.radius.toFixed(1)} <= ${L.coreRadius})`);
     if (!(r.arc[1] > r.arc[0])) problems.push(`ring ${r.folder} has an empty arc`);
   }
 
-  // deeper shells must sit further out
-  const byLevel = new Map();
-  for (const r of rings) {
-    if (!byLevel.has(r.level)) byLevel.set(r.level, []);
-    byLevel.get(r.level).push(Math.hypot(r.cx, r.cy, r.cz) - r.radius);
-  }
-  const levels = [...byLevel.keys()].sort((a, b) => a - b);
-  for (let i = 1; i < levels.length; i++) {
-    const inner = Math.min(...byLevel.get(levels[i - 1]));
-    const outer = Math.min(...byLevel.get(levels[i]));
-    if (outer < inner - 1e-9) problems.push(`level ${levels[i]} sinks inside level ${levels[i - 1]}`);
+  // 1. ring radii must be well separated, or intersection points come back
+  const sorted = rings.slice().sort((a, b) => a.radius - b.radius);
+  for (let i = 1; i < sorted.length; i++) {
+    const d = sorted[i].radius - sorted[i - 1].radius;
+    if (d < minGap) problems.push(`rings ${sorted[i - 1].folder} and ${sorted[i].folder} share a radius (R ${sorted[i].radius.toFixed(1)}, gap ${d.toFixed(2)})`);
   }
 
-  // no two hoops may be identical
-  const seen = new Map();
-  for (const r of rings) {
-    const key = [r.radius, r.rotX, r.rotY, r.rotZ, r.cx, r.cy, r.cz].map((v) => v.toFixed(2)).join("|");
-    if (seen.has(key)) problems.push(`rings ${seen.get(key)} and ${r.folder} are identical`);
-    seen.set(key, r.folder);
-  }
-
-  // orientations and heights must actually vary, or the scene reads as one flat disc again
+  // 2. orientations must vary
   if (rings.length >= 4) {
-    for (const axis of ["rotX", "rotZ"]) {
+    for (const axis of ["rotX", "rotY"]) {
       const vals = rings.map((r) => r[axis]);
-      if (Math.max(...vals) - Math.min(...vals) < 0.3) problems.push(`hoops barely vary in ${axis}`);
+      if (Math.max(...vals) - Math.min(...vals) < 0.3) problems.push(`rings barely vary in ${axis}`);
     }
-    const heights = rings.map((r) => r.cy);
-    if (Math.max(...heights) - Math.min(...heights) < 1) problems.push("every hoop sits at the same height");
+  }
+
+  // 3. the nest must be anchored to the hub: the innermost ring sits just outside the core, so the
+  //    scene reads as orbits around a star rather than detached bubbles floating in space
+  if (rings.length) {
+    const inner = Math.min(...rings.map((r) => r.radius));
+    if (inner > L.coreRadius * 2.2) problems.push(`innermost ring is detached from the hub (R ${inner.toFixed(1)} vs core ${L.coreRadius})`);
   }
 
   for (let i = 0; i < L.pos.length; i++) {

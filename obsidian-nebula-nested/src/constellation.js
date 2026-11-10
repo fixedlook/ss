@@ -12,12 +12,12 @@ import { ringPoints, tiltPoint } from "./layout.js";
 
 export const DEFAULTS = {
   // look
-  color: "#2cf27f", glow: 0.4, glowSize: 0.28, nodeSize: 1.0, links: 1.25, rings: 0.9,
+  color: "#2cf27f", glow: 0.38, glowSize: 0.3, nodeSize: 0.95, links: 1.15, rings: 1.0,
   beads: 420, beadSpeed: 1, comets: true, spin: 0.3, pulse: true, stars: true, labels: true,
   quality: "high", saveGpu: true,
   // structure (these change the layout, so the view rebuilds when they change)
   maxDepth: 3, maxRings: 120, showRootNotes: false, wedgeArcs: true, depthFade: true, spacing: 1,
-  ringSpin: 0.55, coreStyle: "orb", hoopScale: 0.85,
+  ringSpin: 0.55, coreStyle: "orb",
 };
 
 const SWATCHES = [["Green", "#2cf27f"], ["White", "#ffffff"], ["Ice", "#9fdcff"], ["Violet", "#b38cff"], ["Amber", "#ffc46b"], ["Rose", "#ff8fa3"]];
@@ -103,13 +103,13 @@ export class Constellation {
       const g = new THREE.BufferGeometry(); g.setAttribute("position", new THREE.BufferAttribute(pts, 3));
       const depth = L.depths.levels > 1 ? (ring.level - 1) / Math.max(1, L.depths.levels - 1) : 0;
       const fade = this.s.depthFade ? 1 - 0.55 * depth : 1;
-      const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.2 * fade, blending: THREE.AdditiveBlending, depthWrite: false });
+      const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.26 * fade, blending: THREE.AdditiveBlending, depthWrite: false });
       const line = closed ? new THREE.LineLoop(g, mat) : new THREE.Line(g, mat);
       scene.add(line);
       this.ringLines.push(line);
       this.ringPts.push(pts);
       this.ringLocal.push(ring); // rebuild the world-space points when the ring spins
-      this.ringBase.push(0.2 * fade);
+      this.ringBase.push(0.26 * fade);
     }
 
     // ---- links -------------------------------------------------------------
@@ -201,7 +201,7 @@ export class Constellation {
     const c = (this.controls = new TrackballControls(cam, r.domElement));
     Object.assign(c, { rotateSpeed: 2.6, zoomSpeed: 1.1, panSpeed: 0.7, staticMoving: false, dynamicDampingFactor: 0.1, minDistance: 6, maxDistance: far * 7 });
     // frame the whole nest: the old home sat too low and too close and cropped the top rings
-    this.home = new THREE.Vector3(far * 0.18, far * 0.30, far * 1.28);
+    this.home = new THREE.Vector3(far * 0.12, far * 0.26, far * 1.12);
     c.target.set(0, 0, 0);
     if (this.opts.camera && this.opts.camera.pos) {
       // coming back from a rebuild: keep the user where they were
@@ -355,7 +355,6 @@ export class Constellation {
     slider("Nesting depth", "maxDepth", 1, 6, 1, () => this.opts.onRebuild && this.opts.onRebuild());
     slider("Max rings", "maxRings", 6, 300, 1, () => this.opts.onRebuild && this.opts.onRebuild());
     slider("Ring spacing", "spacing", 0.5, 2.0, 0.05, () => this.opts.onRebuild && this.opts.onRebuild());
-    slider("Hoop size", "hoopScale", 0.4, 1.6, 0.05, () => this.opts.onRebuild && this.opts.onRebuild());
     toggle("Sub-ring arcs", "wedgeArcs", () => this.opts.onRebuild && this.opts.onRebuild());
     toggle("Depth fade", "depthFade", () => this.opts.onRebuild && this.opts.onRebuild());
     toggle("Root notes", "showRootNotes", () => this.opts.onRebuild && this.opts.onRebuild());
@@ -400,7 +399,7 @@ export class Constellation {
   // Constellation. If the save is still debounced when that happens, the new instance loads stale
   // settings and the change appears to "not save" (and the panel snaps shut). So persist those
   // synchronously; only cosmetic tweaks are debounced.
-  static STRUCTURE = ["maxDepth", "maxRings", "showRootNotes", "wedgeArcs", "depthFade", "spacing", "coreStyle", "hoopScale"];
+  static STRUCTURE = ["maxDepth", "maxRings", "showRootNotes", "wedgeArcs", "depthFade", "spacing", "coreStyle"];
 
   set(patch) {
     Object.assign(this.s, patch); this.apply(patch);

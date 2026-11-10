@@ -78,20 +78,31 @@ test("layout passes its own audit and is genuinely nested", () => {
   assert.equal(L.depths.levels, 2, "the fixture nests exactly two levels deep");
 });
 
-test("deeper hoops sit further from the hub", () => {
+test("each nesting level sits outside its parent level", () => {
   const t = buildTree(VAULT, { maxDepth: 3 });
   const L = layout(t, [], {});
-  const byLevel = new Map();
   for (const r of L.rings) {
-    if (!byLevel.has(r.level)) byLevel.set(r.level, []);
-    byLevel.get(r.level).push(Math.hypot(r.cx, r.cy, r.cz));
+    if (r.parent === ROOT) continue;
+    const parent = L.ringOf.get(r.parent);
+    assert.ok(r.radius > parent.radius, `${r.folder} (R ${r.radius}) must sit outside its parent ${r.parent} (R ${parent.radius})`);
   }
-  const levels = [...byLevel.keys()].sort((a, b) => a - b);
-  for (let i = 1; i < levels.length; i++) {
-    const inner = Math.max(...byLevel.get(levels[i - 1]));
-    const outer = Math.min(...byLevel.get(levels[i]));
-    assert.ok(outer > inner, `level ${levels[i]} (${outer}) must sit outside level ${levels[i - 1]} (${inner})`);
+});
+
+test("no two rings share a radius (that is what makes circles intersect)", () => {
+  // two circles at equal radius in different planes always cross at exactly two points: the
+  // "petals"/"atom" look. Radii must stay separated.
+  const files = [];
+  for (let d = 0; d < 6; d++) {
+    files.push(`Top${d}/n.md`);
+    for (let s = 0; s < 4; s++) files.push(`Top${d}/Sub${s}/x.md`);
   }
+  const L = layout(buildTree(files, { maxDepth: 3 }), [], {});
+  const sorted = L.rings.slice().sort((a, b) => a.radius - b.radius);
+  for (let i = 1; i < sorted.length; i++) {
+    assert.ok(sorted[i].radius - sorted[i - 1].radius > 1.5,
+      `${sorted[i - 1].folder} and ${sorted[i].folder} are ${(sorted[i].radius - sorted[i - 1].radius).toFixed(2)} apart`);
+  }
+  assert.deepEqual(auditLayout(L), []);
 });
 
 test("sibling arcs tile their parent's circle without overlapping", () => {
@@ -269,22 +280,20 @@ test("a link to a note in the same folder is kept and resolves to a real edge", 
 
 // ---- regressions from real-device feedback --------------------------------------------
 
-test("hoops are NOT coplanar and NOT all great circles through the hub", () => {
-  // shipped bug 1: tilt was +-(0.15 + 0.055*level) -> every ring at ~9-11 degrees
-  // shipped bug 2: every ring was centred on the hub -> petals meeting at one point
+test("rings vary in both orientation and radius, and are anchored to the hub", () => {
   const files = [];
   for (let i = 0; i < 12; i++) files.push(`Top${i}/n.md`);
   const L = layout(buildTree(files, { maxDepth: 2 }), [], {});
   const spread = (vals) => Math.max(...vals) - Math.min(...vals);
 
   assert.ok(spread(L.rings.map((r) => r.rotX)) > 0.5, "pitch must vary");
-  assert.ok(spread(L.rings.map((r) => r.rotZ)) > 0.5, "roll must vary");
-  assert.ok(spread(L.rings.map((r) => r.cy)) > 1, "heights must vary");
-  assert.ok(new Set(L.rings.map((r) => r.rotY.toFixed(2))).size > L.rings.length * 0.8, "yaw must be distinct");
-  for (const r of L.rings) {
-    const clearance = Math.hypot(r.cx, r.cy, r.cz) - r.radius;
-    assert.ok(clearance > L.coreRadius * 0.55, `${r.folder} still passes through the core (${clearance.toFixed(1)})`);
-  }
+  assert.ok(spread(L.rings.map((r) => r.rotY)) > 1, "yaw must be distinct");
+  assert.ok(spread(L.rings.map((r) => r.radius)) > 20, "radii must vary enough to avoid intersections");
+  // anchored: the innermost ring sits just outside the core, not off in space
+  const inner = Math.min(...L.rings.map((r) => r.radius));
+  assert.ok(inner < L.coreRadius * 2.2, `innermost ring (${inner.toFixed(1)}) must hug the core (${L.coreRadius})`);
+  // pitch stays off the two degenerate angles
+  for (const r of L.rings) assert.ok(r.rotX > 0.1 && r.rotX < Math.PI / 2, `pitch ${r.rotX} would render as a line or a perfect circle`);
   assert.deepEqual(auditLayout(L), []);
 });
 
@@ -325,9 +334,16 @@ test("nodes ride their hoop, at the hoop's radius", () => {
   }
 });
 
-test("audit catches hoops that pass through the hub (the 'atom' look)", () => {
+test("audit catches two rings sharing a radius (the intersection bug)", () => {
   const L = layout(buildTree(["A/a.md", "B/b.md", "C/c.md", "D/d.md"], {}), [], {});
-  for (const r of L.rings) { r.cx = 0; r.cy = 0; r.cz = 0; } // force great circles
+  L.rings[1].radius = L.rings[0].radius; // force an intersection
   const problems = auditLayout(L);
-  assert.ok(problems.some((p) => /through the core/.test(p)), `expected a core complaint, got ${JSON.stringify(problems)}`);
+  assert.ok(problems.some((p) => /share a radius/.test(p)), `expected a radius complaint, got ${JSON.stringify(problems)}`);
+});
+
+test("audit catches a detached nest", () => {
+  const L = layout(buildTree(["A/a.md", "B/b.md", "C/c.md", "D/d.md"], {}), [], {});
+  for (const r of L.rings) r.radius *= 4; // float everything away from the hub
+  const problems = auditLayout(L);
+  assert.ok(problems.some((p) => /detached/.test(p)), `expected a detachment complaint, got ${JSON.stringify(problems)}`);
 });
