@@ -79,10 +79,9 @@ class NebulaView extends ItemView {
 
     // 4. geometry
     const L = layout(tree, links, {
-      perLevel: 9 * s.spacing,
-      gap: 6,
+      perLevel: 7.5 * s.spacing,
       coreRadius: 26,
-      jitter: 1.6,
+      hoopScale: s.hoopScale == null ? DEFAULTS.hoopScale : s.hoopScale,
     });
     const problems = auditLayout(L);
     if (problems.length) console.warn("[Nebula Nested] layout audit:", problems);

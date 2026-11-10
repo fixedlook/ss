@@ -78,19 +78,19 @@ test("layout passes its own audit and is genuinely nested", () => {
   assert.equal(L.depths.levels, 2, "the fixture nests exactly two levels deep");
 });
 
-test("deeper rings sit strictly further from the hub", () => {
+test("deeper hoops sit further from the hub", () => {
   const t = buildTree(VAULT, { maxDepth: 3 });
   const L = layout(t, [], {});
   const byLevel = new Map();
   for (const r of L.rings) {
     if (!byLevel.has(r.level)) byLevel.set(r.level, []);
-    byLevel.get(r.level).push(r.radius);
+    byLevel.get(r.level).push(Math.hypot(r.cx, r.cy, r.cz));
   }
   const levels = [...byLevel.keys()].sort((a, b) => a - b);
   for (let i = 1; i < levels.length; i++) {
     const inner = Math.max(...byLevel.get(levels[i - 1]));
     const outer = Math.min(...byLevel.get(levels[i]));
-    assert.ok(outer > inner, `level ${levels[i]} (${outer}) must be outside level ${levels[i - 1]} (${inner})`);
+    assert.ok(outer > inner, `level ${levels[i]} (${outer}) must sit outside level ${levels[i - 1]} (${inner})`);
   }
 });
 
@@ -168,15 +168,16 @@ test("a vault with only containers and no notes anywhere does not crash", () => 
   assert.deepEqual(auditLayout(L), []);
 });
 
-test("ringPoints stays on the radius sphere, full circle and arc", () => {
+test("ringPoints stays on its hoop, full circle and arc", () => {
   const t = buildTree(["A/x.md"], {});
   const L = layout(t, [], {});
   const ring = L.rings[0];
+  const centre = [ring.cx, ring.cy, ring.cz];
   for (const pts of [ringPoints(ring, 64), ringPoints(ring, 48, ring.arc)]) {
     const seg = pts.length / 3;
     for (let i = 0; i < seg; i++) {
-      const d = Math.hypot(pts[i * 3], pts[i * 3 + 1], pts[i * 3 + 2]);
-      assert.ok(Math.abs(d - ring.radius) < 1e-4);
+      const d = Math.hypot(pts[i * 3] - centre[0], pts[i * 3 + 1] - centre[1], pts[i * 3 + 2] - centre[2]);
+      assert.ok(Math.abs(d - ring.radius) < 1e-4, `point ${i} is ${d} from its hoop centre, expected ${ring.radius}`);
     }
   }
 });
@@ -201,6 +202,7 @@ test("scales to a large vault without exploding", () => {
   assert.ok(L.rings.length > 20);
   assert.deepEqual(auditLayout(L), []);
   assert.equal(L.depths.levels, 2);
+  assert.equal(L.depths.rings, 108);
 });
 
 test("very deep nesting still lays out sanely", () => {
@@ -267,20 +269,22 @@ test("a link to a note in the same folder is kept and resolves to a real edge", 
 
 // ---- regressions from real-device feedback --------------------------------------------
 
-test("rings are NOT coplanar: every ring gets its own 3D orientation", () => {
-  // the shipped bug: tilt was ±(0.15 + 0.055*level), so all top-level rings were ~9-11 degrees
+test("hoops are NOT coplanar and NOT all great circles through the hub", () => {
+  // shipped bug 1: tilt was +-(0.15 + 0.055*level) -> every ring at ~9-11 degrees
+  // shipped bug 2: every ring was centred on the hub -> petals meeting at one point
   const files = [];
   for (let i = 0; i < 12; i++) files.push(`Top${i}/n.md`);
-  const t = buildTree(files, { maxDepth: 2 });
-  const L = layout(t, [], {});
-  const polars = L.rings.map((r) => r.polar);
-  const azims = L.rings.map((r) => r.azim);
-  const degrees = (v) => (v * 180) / Math.PI;
+  const L = layout(buildTree(files, { maxDepth: 2 }), [], {});
+  const spread = (vals) => Math.max(...vals) - Math.min(...vals);
 
-  assert.ok(Math.max(...polars) - Math.min(...polars) > 0.5, "polar angles must spread out");
-  assert.ok(new Set(polars.map((p) => p.toFixed(3))).size > L.rings.length * 0.7, "most rings must have a distinct tilt");
-  assert.ok(new Set(azims.map((a) => a.toFixed(3))).size > L.rings.length * 0.7, "most rings must have a distinct azimuth");
-  for (const p of polars) assert.ok(degrees(p) > 10 && degrees(p) < 95, `tilt ${degrees(p)} out of range`);
+  assert.ok(spread(L.rings.map((r) => r.rotX)) > 0.5, "pitch must vary");
+  assert.ok(spread(L.rings.map((r) => r.rotZ)) > 0.5, "roll must vary");
+  assert.ok(spread(L.rings.map((r) => r.cy)) > 1, "heights must vary");
+  assert.ok(new Set(L.rings.map((r) => r.rotY.toFixed(2))).size > L.rings.length * 0.8, "yaw must be distinct");
+  for (const r of L.rings) {
+    const clearance = Math.hypot(r.cx, r.cy, r.cz) - r.radius;
+    assert.ok(clearance > L.coreRadius * 0.55, `${r.folder} still passes through the core (${clearance.toFixed(1)})`);
+  }
   assert.deepEqual(auditLayout(L), []);
 });
 
@@ -288,19 +292,19 @@ test("the hash finalizer de-clusters similar strings", () => {
   // FNV-1a alone maps "Top0".."Top3" to almost the same value; the fmix32 finalizer fixes it
   const files = ["Top0/n.md", "Top1/n.md", "Top2/n.md", "Top3/n.md"];
   const L = layout(buildTree(files, { maxDepth: 1 }), [], {});
-  const rounded = L.rings.map((r) => r.polar.toFixed(2));
-  assert.equal(new Set(rounded).size, 4, "four folders must produce four distinct tilts");
+  const rounded = L.rings.map((r) => r.rotZ.toFixed(2));
+  assert.equal(new Set(rounded).size, 4, "four folders must produce four distinct orientations");
 });
 
-test("spinning a ring preserves its radius and moves its points", () => {
+test("spinning a hoop preserves its radius and moves its points", () => {
   const L = layout(buildTree(["A/a.md", "A/b.md"], {}), [], {});
   const ring = L.rings[0];
   const before = ringPoints(ring, 16);
-  const r0 = Math.hypot(before[0], before[1], before[2]);
+  const r0 = Math.hypot(before[0] - ring.cx, before[1] - ring.cy, before[2] - ring.cz);
   ring.spin = 0.8;
   const after = ringPoints(ring, 16);
-  const r1 = Math.hypot(after[0], after[1], after[2]);
-  assert.ok(Math.abs(r0 - r1) < 1e-6, "radius must survive the spin");
+  const r1 = Math.hypot(after[0] - ring.cx, after[1] - ring.cy, after[2] - ring.cz);
+  assert.ok(Math.abs(r0 - r1) < 1e-5, "radius must survive the spin");
   let moved = 0;
   for (let i = 0; i < before.length; i += 3) {
     if (Math.hypot(before[i] - after[i], before[i + 1] - after[i + 1], before[i + 2] - after[i + 2]) > 1e-4) moved++;
@@ -308,21 +312,22 @@ test("spinning a ring preserves its radius and moves its points", () => {
   assert.equal(moved, 16, "every point must actually move");
 });
 
-test("nodes stay on their ring while it spins", () => {
+test("nodes ride their hoop, at the hoop's radius", () => {
   const L = layout(buildTree(["A/a.md", "A/b.md", "A/c.md"], {}), [], {});
   const ring = L.rings[0];
   const local = L.localByRing.get(ring.folder);
   assert.ok(local && local.length === 3);
-  // a node's local radius must match its slot's distance from the hub before any spin
-  for (const [slot, r] of local) {
-    const d = Math.hypot(L.pos[slot * 3], L.pos[slot * 3 + 1], L.pos[slot * 3 + 2]);
-    assert.ok(Math.abs(d - Math.hypot(r, local.find((l) => l[0] === slot)[3] || 0)) < 6, "node placed near its ring");
+  for (const [slot, r, , y] of local) {
+    const d = Math.hypot(L.pos[slot * 3] - ring.cx, L.pos[slot * 3 + 1] - ring.cy, L.pos[slot * 3 + 2] - ring.cz);
+    // stars sit on the hoop plus a small vertical lift, so the expected distance is hypot(r, y)
+    assert.ok(Math.abs(d - Math.hypot(r, y)) < 1e-3, `node distance ${d} should be hypot(r,y)=${Math.hypot(r, y)}`);
+    assert.ok(Math.abs(r - ring.radius) < 1.8, "node must stay within the hoop's band");
   }
 });
 
-test("audit catches a coplanar layout (guard against the old bug returning)", () => {
+test("audit catches hoops that pass through the hub (the 'atom' look)", () => {
   const L = layout(buildTree(["A/a.md", "B/b.md", "C/c.md", "D/d.md"], {}), [], {});
-  for (const r of L.rings) r.polar = 0.35; // force them all flat
+  for (const r of L.rings) { r.cx = 0; r.cy = 0; r.cz = 0; } // force great circles
   const problems = auditLayout(L);
-  assert.ok(problems.some((p) => /coplanar/.test(p)), `expected a coplanar complaint, got ${JSON.stringify(problems)}`);
+  assert.ok(problems.some((p) => /through the core/.test(p)), `expected a core complaint, got ${JSON.stringify(problems)}`);
 });

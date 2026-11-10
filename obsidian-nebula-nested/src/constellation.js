@@ -12,12 +12,12 @@ import { ringPoints, tiltPoint } from "./layout.js";
 
 export const DEFAULTS = {
   // look
-  color: "#2cf27f", glow: 0.75, glowSize: 0.45, nodeSize: 1.15, links: 1.4, rings: 1,
+  color: "#2cf27f", glow: 0.4, glowSize: 0.28, nodeSize: 1.0, links: 1.25, rings: 0.9,
   beads: 420, beadSpeed: 1, comets: true, spin: 0.3, pulse: true, stars: true, labels: true,
   quality: "high", saveGpu: true,
   // structure (these change the layout, so the view rebuilds when they change)
   maxDepth: 3, maxRings: 120, showRootNotes: false, wedgeArcs: true, depthFade: true, spacing: 1,
-  ringSpin: 0.55, coreStyle: "orb",
+  ringSpin: 0.55, coreStyle: "orb", hoopScale: 0.85,
 };
 
 const SWATCHES = [["Green", "#2cf27f"], ["White", "#ffffff"], ["Ice", "#9fdcff"], ["Violet", "#b38cff"], ["Amber", "#ffc46b"], ["Rose", "#ff8fa3"]];
@@ -152,7 +152,7 @@ export class Constellation {
 
     // ---- core --------------------------------------------------------------
     this.core = this._coreSprite(); this.core.scale.setScalar(this.coreSize); scene.add(this.core);
-    this.coreSize = Math.max(14, L.coreRadius * 1.6);
+    this.coreSize = Math.max(9, L.coreRadius * 1.0);
 
     // ---- comets: one per ring, capped so huge vaults stay calm ------------
     this.comets = []; const TL = 30;
@@ -200,7 +200,8 @@ export class Constellation {
     cam.far = far * 16; cam.updateProjectionMatrix();
     const c = (this.controls = new TrackballControls(cam, r.domElement));
     Object.assign(c, { rotateSpeed: 2.6, zoomSpeed: 1.1, panSpeed: 0.7, staticMoving: false, dynamicDampingFactor: 0.1, minDistance: 6, maxDistance: far * 7 });
-    this.home = new THREE.Vector3(0, far * 0.42, far);
+    // frame the whole nest: the old home sat too low and too close and cropped the top rings
+    this.home = new THREE.Vector3(far * 0.18, far * 0.30, far * 1.28);
     c.target.set(0, 0, 0);
     if (this.opts.camera && this.opts.camera.pos) {
       // coming back from a rebuild: keep the user where they were
@@ -353,7 +354,8 @@ export class Constellation {
     mk("nebula-sub", p).textContent = "Structure";
     slider("Nesting depth", "maxDepth", 1, 6, 1, () => this.opts.onRebuild && this.opts.onRebuild());
     slider("Max rings", "maxRings", 6, 300, 1, () => this.opts.onRebuild && this.opts.onRebuild());
-    slider("Ring spacing", "spacing", 0.5, 2.5, 0.05, () => this.opts.onRebuild && this.opts.onRebuild());
+    slider("Ring spacing", "spacing", 0.5, 2.0, 0.05, () => this.opts.onRebuild && this.opts.onRebuild());
+    slider("Hoop size", "hoopScale", 0.4, 1.6, 0.05, () => this.opts.onRebuild && this.opts.onRebuild());
     toggle("Sub-ring arcs", "wedgeArcs", () => this.opts.onRebuild && this.opts.onRebuild());
     toggle("Depth fade", "depthFade", () => this.opts.onRebuild && this.opts.onRebuild());
     toggle("Root notes", "showRootNotes", () => this.opts.onRebuild && this.opts.onRebuild());
@@ -398,7 +400,7 @@ export class Constellation {
   // Constellation. If the save is still debounced when that happens, the new instance loads stale
   // settings and the change appears to "not save" (and the panel snaps shut). So persist those
   // synchronously; only cosmetic tweaks are debounced.
-  static STRUCTURE = ["maxDepth", "maxRings", "showRootNotes", "wedgeArcs", "depthFade", "spacing", "coreStyle"];
+  static STRUCTURE = ["maxDepth", "maxRings", "showRootNotes", "wedgeArcs", "depthFade", "spacing", "coreStyle", "hoopScale"];
 
   set(patch) {
     Object.assign(this.s, patch); this.apply(patch);

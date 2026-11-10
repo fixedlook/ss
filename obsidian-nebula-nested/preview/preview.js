@@ -1,4 +1,8 @@
 (() => {
+  var __defProp = Object.defineProperty;
+  var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+  var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
+
   // node_modules/three/build/three.core.js
   var REVISION = "185";
   var MOUSE = { LEFT: 0, MIDDLE: 1, RIGHT: 2, ROTATE: 0, DOLLY: 1, PAN: 2 };
@@ -29863,36 +29867,37 @@ void main() {
       h ^= s.charCodeAt(i);
       h = Math.imul(h, 16777619);
     }
+    h ^= h >>> 16;
+    h = Math.imul(h, 2246822507);
+    h ^= h >>> 13;
+    h = Math.imul(h, 3266489909);
+    h ^= h >>> 16;
     return h >>> 0;
   };
   var unit = (s) => hash(s) / 4294967296;
-  function tiltPoint(x, y, z, tiltX, tiltZ, out) {
-    const cy = Math.cos(tiltX), sy = Math.sin(tiltX);
-    const y1 = y * cy - z * sy, z1 = y * sy + z * cy;
-    const cz = Math.cos(tiltZ), sz = Math.sin(tiltZ);
-    out[0] = x * cz - y1 * sz;
-    out[1] = x * sz + y1 * cz;
-    out[2] = z1;
+  function tiltPoint(x, y, z, ring, out) {
+    const cs = Math.cos(ring.spin || 0), ss = Math.sin(ring.spin || 0);
+    const sx = x * cs + z * ss, sz = -x * ss + z * cs;
+    const cx = Math.cos(ring.rotX), snx = Math.sin(ring.rotX);
+    const y1 = y * cx - sz * snx, z1 = y * snx + sz * cx;
+    const cy = Math.cos(ring.rotY), sny = Math.sin(ring.rotY);
+    const x2 = sx * cy + z1 * sny, z2 = -sx * sny + z1 * cy;
+    const cz = Math.cos(ring.rotZ), snz = Math.sin(ring.rotZ);
+    out[0] = x2 * cz - y1 * snz + ring.cx;
+    out[1] = x2 * snz + y1 * cz + ring.cy;
+    out[2] = z2 + ring.cz;
     return out;
   }
   function layout(tree2, links = [], opt = {}) {
     const start = opt.start == null ? 0 : opt.start;
-    const perLevel = opt.perLevel == null ? 9 : opt.perLevel;
-    const gap = opt.gap == null ? 6 : opt.gap;
     const coreRadius = opt.coreRadius == null ? 26 : opt.coreRadius;
-    const jitter = opt.jitter == null ? 1.6 : opt.jitter;
-    const tiltStep = opt.tiltStep == null ? 0.055 : opt.tiltStep;
+    const spacing = opt.spacing == null ? 1 : opt.spacing;
+    const perLevel = (opt.perLevel == null ? 7.5 : opt.perLevel) * spacing;
+    const hoopScale = opt.hoopScale == null ? 0.85 : opt.hoopScale;
+    const elevation = opt.elevation == null ? 1.35 : opt.elevation;
     const nodes = tree2.nodes;
     const folders = tree2.order;
     const sizeOf = (f) => Math.max(1, nodes.get(f).descendants || nodes.get(f).notes.length || 1);
-    const maxLevel = folders.reduce((m, f) => Math.max(m, nodes.get(f).level), 0);
-    const ringsAtLevel = new Array(maxLevel + 1).fill(0);
-    for (const f of folders) ringsAtLevel[nodes.get(f).level]++;
-    const shell = new Array(maxLevel + 1).fill(coreRadius);
-    for (let lv = 1; lv <= maxLevel; lv++) {
-      const crowd = perLevel * 0.5 * Math.sqrt(Math.max(1, ringsAtLevel[lv]));
-      shell[lv] = shell[lv - 1] + Math.max(perLevel, gap + 2) + crowd - perLevel * 0.5;
-    }
     const process = (parent, wedgeStart, wedgeWidth) => {
       const kids = (tree2.siblings.get(parent) || []).filter((f) => nodes.has(f));
       if (!kids.length) return;
@@ -29905,8 +29910,6 @@ void main() {
         n.angle = (a0 + a1) / 2;
         n.wedge = [a0, a1];
         n.level = parent === ROOT ? 1 : nodes.get(parent).level + 1;
-        const frac = kids.length > 1 ? i / (kids.length - 1) - 0.5 : 0;
-        n.radius = shell[n.level] + frac * jitter + (unit("r:" + f) - 0.5) * 0.25;
         n.sibIdx = i;
         cursor = a1;
         process(f, a0, w);
@@ -29918,20 +29921,44 @@ void main() {
     for (const f of folders) {
       const n = nodes.get(f);
       const lv = n.level;
-      const sign = unit("s:" + f) < 0.5 ? -1 : 1;
+      const hoopR = clamp2(perLevel * hoopScale * Math.sqrt(sizeOf(f)) * 1.15, perLevel * 0.7, perLevel * 3.4);
+      const shellBase = coreRadius * 1.08 + (lv - 1) * (perLevel * 1.5) + perLevel * 0.9;
+      const shellD = shellBase + hoopR * 0.5 + unit("sd:" + f) * perLevel * 0.35;
+      const bearing = n.angle + (unit("bj:" + f) - 0.5) * 0.22;
+      const el = (unit("el:" + f) - 0.5) * elevation + (lv % 2 ? 0.12 : -0.12);
+      const cosEl = Math.cos(el);
       const ring = {
         folder: f,
         name: n.name,
-        radius: n.radius,
+        radius: hoopR,
+        shellD,
         level: lv,
         parent: n.parent,
         count: n.notes.length,
         descendants: n.descendants,
         arc: [n.wedge[0], n.wedge[1]],
-        tiltX: sign * (0.15 + tiltStep * (lv - 1)) + (unit("tx:" + f) - 0.5) * 0.05,
-        tiltZ: 0.1 * (lv - 1) + n.sibIdx * 0.03 + (unit("tz:" + f) - 0.5) * 0.12,
+        bearing,
+        elevation: el,
+        // three independent rotations: a genuinely arbitrary plane, not a tilt off flat
+        rotX: unit("rx:" + f) * Math.PI * 0.95,
+        rotY: unit("ry:" + f) * TAU,
+        rotZ: unit("rz:" + f) * Math.PI * 0.95,
+        spin: 0,
+        orbitSpeed: (unit("spin:" + f) - 0.5) * 0.5,
+        orbitPhase: unit("phase:" + f) * TAU,
+        cx: Math.cos(bearing) * cosEl * shellD,
+        cy: Math.sin(el) * shellD * 0.62,
+        cz: Math.sin(bearing) * cosEl * shellD,
         slot: -1
       };
+      const sibs = rings.filter((o) => o.parent === n.parent && o.level === lv);
+      for (let guard = 0; guard < 10; guard++) {
+        const clash = sibs.some((o) => Math.abs(o.cy - ring.cy) < shellD * 0.12 && Math.abs((o.rotX - ring.rotX + Math.PI * 3) % TAU - Math.PI) < 0.35);
+        if (!clash) break;
+        ring.rotX = (ring.rotX + 0.618034 * Math.PI) % Math.PI;
+        ring.cy += (unit("cy:" + f + guard) < 0.5 ? -1 : 1) * shellD * 0.16;
+      }
+      if (sibs.length && unit("dir:" + f) < 0.5) ring.orbitSpeed = -ring.orbitSpeed;
       rings.push(ring);
       ringOf.set(f, ring);
     }
@@ -29945,6 +29972,7 @@ void main() {
     const phase = new Float32Array(total);
     const slotToNote = new Array(total).fill(null);
     const noteSlot = /* @__PURE__ */ new Map();
+    const localByRing = /* @__PURE__ */ new Map();
     const tmp = [0, 0, 0];
     const scale = Math.min(2.4, Math.max(0.5, 3 / Math.pow(Math.max(N, 50) / 100, 0.3)));
     let slot = 1;
@@ -29952,15 +29980,18 @@ void main() {
       const ring = ringOf.get(folder);
       const R = rngFrom(hash(path));
       if (ring) {
+        if (!localByRing.has(ring.folder)) localByRing.set(ring.folder, []);
+        const localNotes = localByRing.get(ring.folder);
         const [a0, a1] = ring.arc;
         const th = a0 + R() * Math.max(1e-4, a1 - a0);
-        const band = clamp2(0.7 + Math.sqrt(ring.count) * 0.3, 0.8, 2.6);
+        const band = clamp2(0.35 + Math.sqrt(ring.count) * 0.16, 0.4, 1.6);
         const rr = ring.radius + (R() - 0.5) * band * 2;
-        const y = (R() - 0.5) * band * 0.7;
-        tiltPoint(Math.cos(th) * rr, y, Math.sin(th) * rr, ring.tiltX, ring.tiltZ, tmp);
+        const y = (R() - 0.5) * band * 0.8;
+        tiltPoint(Math.cos(th) * rr, y, Math.sin(th) * rr, ring, tmp);
         pos.set(tmp, slot * 3);
+        localNotes.push([slot, rr, th, y]);
       } else {
-        const th = R() * TAU, rr = coreRadius * (1.3 + R() * 0.7);
+        const th = R() * TAU, rr = coreRadius * (1.2 + R() * 0.6);
         pos.set([Math.cos(th) * rr, (R() - 0.5) * 5, Math.sin(th) * rr], slot * 3);
       }
       aSize[slot] = 1.3 * scale;
@@ -29973,9 +30004,9 @@ void main() {
       const s = slot++;
       const R = rngFrom(hash("hub:" + ring.folder));
       const mid = (ring.arc[0] + ring.arc[1]) / 2;
-      tiltPoint(Math.cos(mid) * ring.radius, 0, Math.sin(mid) * ring.radius, ring.tiltX, ring.tiltZ, tmp);
+      tiltPoint(Math.cos(mid) * ring.radius, 0, Math.sin(mid) * ring.radius, ring, tmp);
       pos.set(tmp, s * 3);
-      aSize[s] = 4 * scale;
+      aSize[s] = 3.4 * scale;
       phase[s] = R() * TAU;
       ring.slot = s;
     }
@@ -29989,8 +30020,8 @@ void main() {
       deg[y]++;
     }
     for (let s = 1; s <= N; s++) aSize[s] = (1.3 + Math.min(4.2, Math.sqrt(deg[s]) * 0.8)) * scale;
-    const maxR = rings.reduce((m, r) => Math.max(m, r.radius), coreRadius);
-    const far = Math.max(60, maxR * 1.25);
+    const maxR = rings.reduce((m, r) => Math.max(m, Math.hypot(r.cx, r.cy, r.cz) + r.radius), coreRadius * 2);
+    const far = Math.max(60, maxR * 1.15);
     return {
       pos,
       aSize,
@@ -30001,16 +30032,15 @@ void main() {
       notes: noteList.map(([p]) => p),
       slotToNote,
       noteSlot,
+      localByRing,
       rings,
       ringOf,
-      radius: new Map(folders.map((f) => [f, nodes.get(f).radius])).set(ROOT, coreRadius),
+      radius: new Map(folders.map((f) => [f, nodes.get(f).radius || ringOf.get(f).radius])),
       far,
       scale,
       coreRadius,
-      shell,
-      maxLevel,
       depths: {
-        levels: maxLevel,
+        levels: rings.reduce((m, r) => Math.max(m, r.level), 0),
         rings: rings.length,
         notes: N,
         loose: (tree2.loose || []).length
@@ -30022,11 +30052,9 @@ void main() {
     const tmp = [0, 0, 0];
     const a0 = range ? range[0] : 0;
     const span = range ? range[1] - range[0] : TAU;
-    const closed = !range;
-    const n = closed ? seg : seg;
-    for (let s = 0; s < n; s++) {
-      const th = a0 + s / n * span;
-      tiltPoint(Math.cos(th) * ring.radius, 0, Math.sin(th) * ring.radius, ring.tiltX, ring.tiltZ, tmp);
+    for (let s = 0; s < seg; s++) {
+      const th = a0 + s / seg * span;
+      tiltPoint(Math.cos(th) * ring.radius, 0, Math.sin(th) * ring.radius, ring, tmp);
       out[s * 3] = tmp[0];
       out[s * 3 + 1] = tmp[1];
       out[s * 3 + 2] = tmp[2];
@@ -30036,31 +30064,42 @@ void main() {
   function auditLayout(L2, minGap = 1) {
     const problems2 = [];
     const { rings } = L2;
+    const TAU2 = Math.PI * 2;
     for (const r of rings) {
-      if (r.radius <= L2.coreRadius) problems2.push(`ring ${r.folder} inside the hub (${r.radius.toFixed(1)} <= ${L2.coreRadius})`);
-      if (r.parent !== ROOT) {
-        const p = L2.ringOf.get(r.parent);
-        if (p && r.radius - p.radius < minGap) problems2.push(`ring ${r.folder} too close to its parent ${r.parent} (${r.radius.toFixed(1)} vs ${p.radius.toFixed(1)})`);
+      if (![r.radius, r.rotX, r.rotY, r.rotZ, r.cx, r.cy, r.cz].every(Number.isFinite)) {
+        problems2.push(`ring ${r.folder} has a non-finite transform`);
+        continue;
       }
-      if (!Number.isFinite(r.radius) || !Number.isFinite(r.tiltX) || !Number.isFinite(r.tiltZ)) problems2.push(`ring ${r.folder} has a non-finite transform`);
+      const centreDist = Math.hypot(r.cx, r.cy, r.cz);
+      if (centreDist - r.radius < L2.coreRadius * 0.55) {
+        problems2.push(`ring ${r.folder} passes through the core (${(centreDist - r.radius).toFixed(1)} vs core ${L2.coreRadius})`);
+      }
       if (!(r.arc[1] > r.arc[0])) problems2.push(`ring ${r.folder} has an empty arc`);
     }
     const byLevel = /* @__PURE__ */ new Map();
     for (const r of rings) {
       if (!byLevel.has(r.level)) byLevel.set(r.level, []);
-      byLevel.get(r.level).push(r.radius);
+      byLevel.get(r.level).push(Math.hypot(r.cx, r.cy, r.cz) - r.radius);
     }
     const levels = [...byLevel.keys()].sort((a, b) => a - b);
     for (let i = 1; i < levels.length; i++) {
-      const inner = Math.max(...byLevel.get(levels[i - 1]));
+      const inner = Math.min(...byLevel.get(levels[i - 1]));
       const outer = Math.min(...byLevel.get(levels[i]));
-      if (outer <= inner) problems2.push(`level ${levels[i]} (min ${outer.toFixed(1)}) does not sit outside level ${levels[i - 1]} (max ${inner.toFixed(1)})`);
+      if (outer < inner - 1e-9) problems2.push(`level ${levels[i]} sinks inside level ${levels[i - 1]}`);
     }
     const seen = /* @__PURE__ */ new Map();
     for (const r of rings) {
-      const key = `${r.radius.toFixed(2)}|${r.tiltX.toFixed(3)}|${r.tiltZ.toFixed(3)}`;
+      const key = [r.radius, r.rotX, r.rotY, r.rotZ, r.cx, r.cy, r.cz].map((v) => v.toFixed(2)).join("|");
       if (seen.has(key)) problems2.push(`rings ${seen.get(key)} and ${r.folder} are identical`);
       seen.set(key, r.folder);
+    }
+    if (rings.length >= 4) {
+      for (const axis of ["rotX", "rotZ"]) {
+        const vals = rings.map((r) => r[axis]);
+        if (Math.max(...vals) - Math.min(...vals) < 0.3) problems2.push(`hoops barely vary in ${axis}`);
+      }
+      const heights = rings.map((r) => r.cy);
+      if (Math.max(...heights) - Math.min(...heights) < 1) problems2.push("every hoop sits at the same height");
     }
     for (let i = 0; i < L2.pos.length; i++) {
       if (!Number.isFinite(L2.pos[i])) {
@@ -30075,11 +30114,11 @@ void main() {
   var DEFAULTS = {
     // look
     color: "#2cf27f",
-    glow: 0.75,
-    glowSize: 0.45,
-    nodeSize: 1.15,
-    links: 1.4,
-    rings: 1,
+    glow: 0.4,
+    glowSize: 0.28,
+    nodeSize: 1,
+    links: 1.25,
+    rings: 0.9,
     beads: 420,
     beadSpeed: 1,
     comets: true,
@@ -30095,7 +30134,10 @@ void main() {
     showRootNotes: false,
     wedgeArcs: true,
     depthFade: true,
-    spacing: 1
+    spacing: 1,
+    ringSpin: 0.55,
+    coreStyle: "orb",
+    hoopScale: 0.85
   };
   var SWATCHES = [["Green", "#2cf27f"], ["White", "#ffffff"], ["Ice", "#9fdcff"], ["Violet", "#b38cff"], ["Amber", "#ffc46b"], ["Rose", "#ff8fa3"]];
   var QUALITY = { fast: 1, high: 1.75, max: 2.5 };
@@ -30122,7 +30164,7 @@ void main() {
     vec3 col = uColor * (halo * 0.5) + vec3(1.0) * core * (0.3 + vBoost * 0.7);
     gl_FragColor = vec4(col * vFade * (0.7 + vBoost * 0.8), halo * vFade * 0.8);
   }`;
-  var Constellation = class {
+  var _Constellation = class _Constellation {
     /**
      * @param {HTMLElement} el container
      * @param {{L:object, tree:object}} ctx  result of layout() and buildTree()
@@ -30191,10 +30233,15 @@ void main() {
       this.ringLines = [];
       this.ringPts = [];
       this.ringBase = [];
+      this.ringLocal = [];
+      this.ringArc = [];
+      this.nodeLocal = L2.rings.map((r2) => L2.localByRing.get(r2.folder) || null);
       const maxR = L2.far / 1.25;
       for (const ring of L2.rings) {
         const closed = ring.level === 1 || !wedge;
         const seg = closed ? 240 : Math.max(24, Math.min(240, Math.round((ring.arc[1] - ring.arc[0]) / (Math.PI * 2) * 320)));
+        if (closed) this.ringArc.push(null);
+        else this.ringArc.push([ring.arc[0], ring.arc[1], seg]);
         const pts = closed ? ringPoints(ring, seg) : ringPoints(ring, seg, ring.arc);
         const g = new BufferGeometry();
         g.setAttribute("position", new BufferAttribute(pts, 3));
@@ -30205,6 +30252,7 @@ void main() {
         scene.add(line);
         this.ringLines.push(line);
         this.ringPts.push(pts);
+        this.ringLocal.push(ring);
         this.ringBase.push(0.2 * fade);
       }
       this.adj = /* @__PURE__ */ new Map();
@@ -30250,8 +30298,9 @@ void main() {
       this.beadPts.frustumCulled = false;
       scene.add(this.beadPts);
       this.core = this._coreSprite();
+      this.core.scale.setScalar(this.coreSize);
       scene.add(this.core);
-      this.coreSize = Math.max(14, L2.coreRadius * 1.6);
+      this.coreSize = Math.max(9, L2.coreRadius * 1);
       this.comets = [];
       const TL = 30;
       const cometRings = L2.rings.slice().sort((a, b) => b.descendants - a.descendants).slice(0, 18).map((r2) => L2.rings.indexOf(r2));
@@ -30264,7 +30313,8 @@ void main() {
         line.frustumCulled = false;
         scene.add(line);
         const R = this._rng(100 + i);
-        this.comets.push({ line, lp: pts, ph: R(), sp: (0.02 + R() * 0.04) * (R() < 0.5 ? -1 : 1), TL, level: L2.rings[i].level });
+        this.comets.push({ line, lp: pts, ph: R(), sp: (0.02 + R() * 0.04) * (R() < 0.5 ? -1 : 1), TL, level: L2.rings[i].level, ringIdx: i });
+        (this.cometRing = this.cometRing || /* @__PURE__ */ new Map()).set(this.comets[this.comets.length - 1], i);
       }
       this.halos = [0.95, 1.35, 1.8].map((k, i) => {
         const seg = 128, a = new Float32Array(seg * 3);
@@ -30300,7 +30350,7 @@ void main() {
       cam.updateProjectionMatrix();
       const c = this.controls = new TrackballControls(cam, r.domElement);
       Object.assign(c, { rotateSpeed: 2.6, zoomSpeed: 1.1, panSpeed: 0.7, staticMoving: false, dynamicDampingFactor: 0.1, minDistance: 6, maxDistance: far * 7 });
-      this.home = new Vector3(0, far * 0.42, far);
+      this.home = new Vector3(far * 0.18, far * 0.3, far * 1.28);
       c.target.set(0, 0, 0);
       if (this.opts.camera && this.opts.camera.pos) {
         cam.position.fromArray(this.opts.camera.pos);
@@ -30345,46 +30395,46 @@ void main() {
       }
       this.linkGeo.attributes.color.needsUpdate = true;
     }
-    // plain glowing rounded square, no logo
-    _coreSprite() {
+    // a glowing orb: radial falloff, a soft rim, no polygon edges to betray the sprite
+    _coreSprite(style) {
       const c = document.createElement("canvas");
       c.width = c.height = 256;
       const g = c.getContext("2d");
       const rgb = this.color, rgba = (a) => `rgba(${Math.round(rgb.r * 255)},${Math.round(rgb.g * 255)},${Math.round(rgb.b * 255)},${a})`;
-      const rr = (x, y, w, h, r) => {
+      const kind = style || this.s.coreStyle || "orb";
+      g.clearRect(0, 0, 256, 256);
+      if (kind === "dot") {
+        const r0 = g.createRadialGradient(128, 128, 0, 128, 128, 70);
+        r0.addColorStop(0, rgba(1));
+        r0.addColorStop(0.35, rgba(0.85));
+        r0.addColorStop(1, rgba(0));
+        g.fillStyle = r0;
         g.beginPath();
-        g.moveTo(x + r, y);
-        g.arcTo(x + w, y, x + w, y + h, r);
-        g.arcTo(x + w, y + h, x, y + h, r);
-        g.arcTo(x, y + h, x, y, r);
-        g.arcTo(x, y, x + w, y, r);
-        g.closePath();
-      };
-      const glow = g.createRadialGradient(128, 128, 40, 128, 128, 128);
-      glow.addColorStop(0, rgba(0.5));
-      glow.addColorStop(1, rgba(0));
-      g.fillStyle = glow;
-      g.fillRect(0, 0, 256, 256);
-      rr(56, 56, 144, 144, 38);
-      const fill = g.createLinearGradient(0, 56, 0, 200);
-      fill.addColorStop(0, rgba(0.98));
-      fill.addColorStop(1, rgba(0.72));
-      g.fillStyle = fill;
-      g.fill();
-      g.lineWidth = 3;
-      g.strokeStyle = "rgba(255,255,255,.55)";
-      g.stroke();
-      const shine = g.createLinearGradient(0, 60, 0, 130);
-      shine.addColorStop(0, "rgba(255,255,255,.35)");
-      shine.addColorStop(1, "rgba(255,255,255,0)");
-      rr(64, 62, 128, 64, 30);
-      g.fillStyle = shine;
-      g.fill();
+        g.arc(128, 128, 70, 0, Math.PI * 2);
+        g.fill();
+      } else if (kind === "none") {
+      } else {
+        const r0 = g.createRadialGradient(128, 128, 0, 128, 128, 118);
+        r0.addColorStop(0, "rgba(255,255,255,1)");
+        r0.addColorStop(0.18, rgba(0.95));
+        r0.addColorStop(0.55, rgba(0.42));
+        r0.addColorStop(0.82, rgba(0.1));
+        r0.addColorStop(1, rgba(0));
+        g.fillStyle = r0;
+        g.beginPath();
+        g.arc(128, 128, 118, 0, Math.PI * 2);
+        g.fill();
+        g.strokeStyle = "rgba(255,255,255,.22)";
+        g.lineWidth = 2;
+        g.beginPath();
+        g.arc(128, 128, 74, 0, Math.PI * 2);
+        g.stroke();
+      }
       const tex = new CanvasTexture(c);
       tex.colorSpace = SRGBColorSpace;
-      const s = new Sprite(new SpriteMaterial({ map: tex, transparent: true, depthWrite: false, opacity: 0.95, depthTest: false }));
-      s.renderOrder = 10;
-      return s;
+      const sp = new Sprite(new SpriteMaterial({ map: tex, transparent: true, depthWrite: false, opacity: 0.95, depthTest: false }));
+      sp.renderOrder = 10;
+      return sp;
     }
     // ---------------------------------------------------------------- UI
     _ui() {
@@ -30423,6 +30473,7 @@ level ${ring.level}`;
       b3.textContent = "Customize";
       b3.addEventListener("click", () => this.panel.classList.toggle("is-open"));
       this._panel(mk);
+      if (this.opts.panelOpen) this.panel.classList.add("is-open");
     }
     _panel(mk) {
       const p = this.panel = mk("nebula-panel");
@@ -30433,17 +30484,58 @@ level ${ring.level}`;
         return r;
       };
       const cr = row("Color"), sw = mk("nebula-sw", cr);
-      SWATCHES.forEach(([name, hex]) => {
+      SWATCHES.forEach(([name, hex2]) => {
         const b = mk("nebula-dot", sw, "button");
         b.title = name;
-        b.style.background = hex;
-        b.addEventListener("click", () => this.set({ color: hex }));
+        b.style.background = hex2;
+        b.addEventListener("click", () => {
+          this.set({ color: hex2 });
+          if (this.hexInput) this.hexInput.value = hex2;
+        });
       });
-      const pick = mk("nebula-pick", sw, "input");
+      const custom = mk("nebula-custom", cr, "button");
+      custom.title = "Pick any colour";
+      custom.append(mk("nebula-custom-chip", custom, "span"), mk("nebula-custom-label", custom, "span"));
+      custom.querySelector(".nebula-custom-label").textContent = "Custom";
+      const pick = mk("nebula-pick", custom, "input");
       pick.type = "color";
       pick.value = this.s.color;
-      pick.addEventListener("input", () => this.set({ color: pick.value }));
+      const hex = mk("nebula-hex", p, "input");
+      hex.type = "text";
+      hex.spellcheck = false;
+      hex.placeholder = "#2cf27f";
+      const hexRow = mk("nebula-row", p);
+      mk("nebula-rl", hexRow).textContent = "Hex";
+      hexRow.appendChild(hex);
+      const chip = () => {
+        if (!custom.firstChild) return;
+        custom.firstChild.style.background = this.s.color;
+        custom.style.borderColor = this.s.color + "66";
+      };
+      const applyHex = () => {
+        const v = hex.value.trim().replace(/^#?/, "#");
+        if (/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(v)) {
+          const full = v.length === 4 ? "#" + v.slice(1).split("").map((ch) => ch + ch).join("") : v;
+          this.set({ color: full });
+          pick.value = full;
+          hex.value = full;
+          chip();
+        } else hex.value = this.s.color;
+      };
+      pick.addEventListener("input", () => {
+        this.set({ color: pick.value });
+        hex.value = pick.value;
+        chip();
+      });
+      hex.addEventListener("change", applyHex);
+      hex.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") applyHex();
+      });
       this.picker = pick;
+      this.hexInput = hex;
+      this._chip = chip;
+      hex.value = this.s.color;
+      chip();
       const slider = (label, key, min, max, step, after) => {
         const r = row(label), inp = mk("nebula-range", r, "input"), out = mk("nebula-val", r, "span");
         Object.assign(inp, { type: "range", min, max, step, value: this.s[key] });
@@ -30476,7 +30568,8 @@ level ${ring.level}`;
       mk("nebula-sub", p).textContent = "Structure";
       slider("Nesting depth", "maxDepth", 1, 6, 1, () => this.opts.onRebuild && this.opts.onRebuild());
       slider("Max rings", "maxRings", 6, 300, 1, () => this.opts.onRebuild && this.opts.onRebuild());
-      slider("Ring spacing", "spacing", 0.5, 2.5, 0.05, () => this.opts.onRebuild && this.opts.onRebuild());
+      slider("Ring spacing", "spacing", 0.5, 2, 0.05, () => this.opts.onRebuild && this.opts.onRebuild());
+      slider("Hoop size", "hoopScale", 0.4, 1.6, 0.05, () => this.opts.onRebuild && this.opts.onRebuild());
       toggle("Sub-ring arcs", "wedgeArcs", () => this.opts.onRebuild && this.opts.onRebuild());
       toggle("Depth fade", "depthFade", () => this.opts.onRebuild && this.opts.onRebuild());
       toggle("Root notes", "showRootNotes", () => this.opts.onRebuild && this.opts.onRebuild());
@@ -30488,12 +30581,23 @@ level ${ring.level}`;
       slider("Rings", "rings", 0, 3, 0.05);
       slider("Light beads", "beads", 0, MAX_BEADS, 10);
       slider("Bead speed", "beadSpeed", 0.1, 4, 0.1);
-      slider("Spin", "spin", 0, 2, 0.05);
+      slider("Spin (scene)", "spin", 0, 2, 0.05);
+      slider("Orbit spin", "ringSpin", 0, 3, 0.05);
       toggle("Comets", "comets");
       toggle("Pulse", "pulse");
       toggle("Stars", "stars");
       toggle("Folder names", "labels");
       toggle("Save GPU in background", "saveGpu");
+      const corer = row("Core"), coreSeg = mk("nebula-seg", corer);
+      [["orb", "Orb"], ["dot", "Star"], ["none", "None"]].forEach(([v, label]) => {
+        const b = mk("nebula-segb", coreSeg, "button");
+        b.textContent = label;
+        b.addEventListener("click", () => {
+          this.set({ coreStyle: v });
+          coreSeg.querySelectorAll("button").forEach((x) => x.classList.toggle("is-on", x === b));
+        });
+        if (this.s.coreStyle === v) b.classList.add("is-on");
+      });
       const qr = row("Quality"), seg = mk("nebula-seg", qr);
       this._qBtns = Object.keys(QUALITY).map((q) => {
         const b = mk("nebula-segb", seg, "button");
@@ -30513,8 +30617,15 @@ level ${ring.level}`;
     set(patch) {
       Object.assign(this.s, patch);
       this.apply(patch);
+      const structural = Object.keys(patch).some((k) => _Constellation.STRUCTURE.includes(k));
       window.clearTimeout(this._saveT);
-      this._saveT = window.setTimeout(() => this.opts.onSettings && this.opts.onSettings(Object.assign({}, this.s)), 300);
+      const save = () => this.opts.onSettings && this.opts.onSettings(Object.assign({}, this.s));
+      if (structural) save();
+      else this._saveT = window.setTimeout(save, 300);
+    }
+    /** panel visibility, so a rebuild can put the user back where they were */
+    panelOpen() {
+      return this.panel && this.panel.classList.contains("is-open");
     }
     apply(patch) {
       const s = this.s;
@@ -30525,6 +30636,7 @@ level ${ring.level}`;
         this._linkColors();
         const old = this.core;
         this.core = this._coreSprite();
+        this.core.scale.setScalar(this.coreSize);
         this.scene.add(this.core);
         if (old) {
           this.scene.remove(old);
@@ -30533,6 +30645,19 @@ level ${ring.level}`;
         }
         this.root.style.setProperty("--nebula-color", s.color);
         if (this.picker) this.picker.value = s.color;
+        if (this.hexInput) this.hexInput.value = s.color;
+        if (this._chip) this._chip();
+      }
+      if (patch && "coreStyle" in patch) {
+        const old = this.core;
+        this.core = this._coreSprite();
+        this.core.scale.setScalar(this.coreSize);
+        this.scene.add(this.core);
+        if (old) {
+          this.scene.remove(old);
+          old.material.map.dispose();
+          old.material.dispose();
+        }
       }
       this.bloom.strength = s.glow;
       this.bloom.radius = s.glowSize;
@@ -30733,6 +30858,35 @@ level ${ring.level}`;
           el.style.transform = `translate(${(tmp.x * 0.5 + 0.5) * w}px,${(-tmp.y * 0.5 + 0.5) * h}px) translate(-50%,-135%) scale(${ring.level === 1 ? 1 : 0.86})`;
         }
       }
+      if (!this.reduced && this.s.ringSpin > 0) {
+        for (let i = 0; i < this.ringLocal.length; i++) {
+          const ring = this.ringLocal[i];
+          const speed = (ring.orbitSpeed || 0) * this.s.ringSpin;
+          if (!speed) continue;
+          ring.spin = (ring.spin || 0) + speed * dt / 1e3;
+          const arc = this.ringArc[i];
+          const pts = arc ? ringPoints(ring, arc[2], [arc[0], arc[1]]) : ringPoints(ring, this.ringPts[i].length / 3);
+          const attr = this.ringLines[i].geometry.attributes.position;
+          attr.array.set(pts);
+          attr.needsUpdate = true;
+          this.ringPts[i] = pts;
+          const local = this.nodeLocal[i];
+          if (local) {
+            const P = this.L.pos, out = [0, 0, 0];
+            for (const [slot, r, th, y] of local) {
+              tiltPoint(Math.cos(th) * r, y, Math.sin(th) * r, ring, out);
+              P[slot * 3] = out[0];
+              P[slot * 3 + 1] = out[1];
+              P[slot * 3 + 2] = out[2];
+            }
+            this.points.geometry.attributes.position.needsUpdate = true;
+          }
+        }
+        for (const cm of this.comets) {
+          const idx = this.cometRing.get(cm);
+          if (idx != null) cm.lp = this.ringPts[idx];
+        }
+      }
       const nb = Math.min(MAX_BEADS, Math.round(this.s.beads));
       if (!this.reduced && nb > 0 && this.edges.length) {
         const bp = this.beadPts.geometry.attributes.position.array, P = this.L.pos, sp = this.s.beadSpeed * dt / 1e3;
@@ -30794,6 +30948,12 @@ level ${ring.level}`;
       this.root.remove();
     }
   };
+  // Structure keys change the geometry, and the geometry is rebuilt by constructing a new
+  // Constellation. If the save is still debounced when that happens, the new instance loads stale
+  // settings and the change appears to "not save" (and the panel snaps shut). So persist those
+  // synchronously; only cosmetic tweaks are debounced.
+  __publicField(_Constellation, "STRUCTURE", ["maxDepth", "maxRings", "showRootNotes", "wedgeArcs", "depthFade", "spacing", "coreStyle", "hoopScale"]);
+  var Constellation = _Constellation;
 
   // src/preview.js
   var VAULT = [
