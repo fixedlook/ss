@@ -45,20 +45,75 @@ const unit = (s) => hash(s) / 4294967296;
  * The translation is what stops every ring from being a great circle through the hub.
  */
 export function tiltPoint(x, y, z, ring, out) {
-  // 1. spin around the hoop's own axis (local y)
+  // 1. spin around the ring's own axis (local y)
   const cs = Math.cos(ring.spin || 0), ss = Math.sin(ring.spin || 0);
   const sx = x * cs + z * ss, sz = -x * ss + z * cs;
-  // 2. pitch about X
-  const cx = Math.cos(ring.rotX), snx = Math.sin(ring.rotX);
-  const y1 = y * cx - sz * snx, z1 = y * snx + sz * cx;
-  // 3. yaw about Y
-  const cy = Math.cos(ring.rotY), sny = Math.sin(ring.rotY);
-  const x2 = sx * cy + z1 * sny, z2 = -sx * sny + z1 * cy;
-  // 4. roll about Z
-  const cz = Math.cos(ring.rotZ), snz = Math.sin(ring.rotZ);
-  out[0] = x2 * cz - y1 * snz + ring.cx;
-  out[1] = x2 * snz + y1 * cz + ring.cy;
-  out[2] = z2 + ring.cz;
+  // 2. orient: either a precomputed rotation matrix (precessing) or the static rotX/rotY/rotZ
+  let x1, y1, z1;
+  if (ring.rotM) {
+    const m = ring.rotM;
+    x1 = m[0] * sx + m[1] * y + m[2] * sz;
+    y1 = m[3] * sx + m[4] * y + m[5] * sz;
+    z1 = m[6] * sx + m[7] * y + m[8] * sz;
+  } else {
+    const cx = Math.cos(ring.rotX), snx = Math.sin(ring.rotX);
+    const ya = y * cx - sz * snx, za = y * snx + sz * cx;
+    const cy = Math.cos(ring.rotY), sny = Math.sin(ring.rotY);
+    x1 = sx * cy + za * sny; z1 = -sx * sny + za * cy;
+    const cz = Math.cos(ring.rotZ), snz = Math.sin(ring.rotZ);
+    const xb = x1 * cz - ya * snz;
+    y1 = x1 * snz + ya * cz;
+    x1 = xb;
+  }
+  out[0] = x1 + ring.cx;
+  out[1] = y1 + ring.cy;
+  out[2] = z1 + ring.cz;
+  return out;
+}
+
+/**
+ * Advance a ring's precession by `angle` radians about its own random axis and refresh its basis
+ * matrix. Called every frame by the renderer; exported so the motion can be tested.
+ */
+export function precessRing(ring, angle) {
+  if (!angle) return ring;
+  // compose current basis with a rotation about the ring's axis
+  const base = ring.rotM || basisFromEuler(ring.rotX, ring.rotY, ring.rotZ);
+  ring.rotM = mul3(axisAngle(ring.precAxis, angle), base);
+  return ring;
+}
+
+/** rotation matrix (row-major, 9 numbers) from XYZ Euler angles */
+export function basisFromEuler(rx, ry, rz) {
+  const cx = Math.cos(rx), sx = Math.sin(rx);
+  const cy = Math.cos(ry), sy = Math.sin(ry);
+  const cz = Math.cos(rz), sz = Math.sin(rz);
+  // R = Rz * Ry * Rx, matching tiltPoint's X -> Y -> Z application order
+  return [
+    cz * cy, cz * sy * sx - sz * cx, cz * sy * cx + sz * sx,
+    sz * cy, sz * sy * sx + cz * cx, sz * sy * cx - cz * sx,
+    -sy, cy * sx, cy * cx,
+  ];
+}
+
+/** rotation matrix for `angle` radians about a unit axis (Rodrigues) */
+export function axisAngle([ax, ay, az], angle) {
+  const c = Math.cos(angle), s = Math.sin(angle), t = 1 - c;
+  return [
+    t * ax * ax + c, t * ax * ay - s * az, t * ax * az + s * ay,
+    t * ax * ay + s * az, t * ay * ay + c, t * ay * az - s * ax,
+    t * ax * az - s * ay, t * ay * az + s * ax, t * az * az + c,
+  ];
+}
+
+/** 3x3 row-major matrix product */
+export function mul3(a, b) {
+  const out = new Array(9);
+  for (let r = 0; r < 3; r++) {
+    for (let c = 0; c < 3; c++) {
+      out[r * 3 + c] = a[r * 3] * b[c] + a[r * 3 + 1] * b[3 + c] + a[r * 3 + 2] * b[6 + c];
+    }
+  }
   return out;
 }
 
@@ -157,8 +212,17 @@ export function layout(tree, links = [], opt = {}) {
         rotY: unit("ry:" + f) * TAU,
         rotZ: (unit("rz:" + f) - 0.5) * 0.5,
         spin: 0,
+        // Spin (stars sliding along the ring) is almost invisible on a circle. Precession is what
+        // you actually see: the ring's *plane* tilts over time. Axis is a random direction, so no
+        // two rings tumble the same way.
         orbitSpeed: (unit("spin:" + f) - 0.5) * 0.6,
         orbitPhase: unit("phase:" + f) * TAU,
+        precAxis: (() => {
+          const v = [unit("px:" + f) - 0.5, unit("py:" + f) - 0.5, unit("pz:" + f) - 0.5];
+          const m = Math.hypot(...v) || 1;
+          return [v[0] / m, v[1] / m, v[2] / m];
+        })(),
+        precSpeed: (0.12 + unit("ps:" + f) * 0.5) * (unit("pd:" + f) < 0.5 ? -1 : 1),
         // concentric: the ring's plane passes through the hub, which is fine at varied radii
         cx: 0, cy: 0, cz: 0,
         slot: -1,

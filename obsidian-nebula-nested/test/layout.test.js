@@ -349,7 +349,7 @@ test("audit catches a detached nest", () => {
 });
 
 // ---- camera framing: the nest must fit the viewport at any aspect ratio ---------------
-import { cameraFit } from "../src/layout.js";
+import { cameraFit, precessRing, basisFromEuler } from "../src/layout.js";
 
 /** project every ring point through a look-at-origin camera and return the worst NDC extent */
 function projectionExtent(L, fovDeg, aspect, elev = 0.30) {
@@ -384,6 +384,15 @@ function projectionExtent(L, fovDeg, aspect, elev = 0.30) {
   return { maxX, maxY, dist };
 }
 
+/** the ring's plane normal: the world-space direction of its local Y axis */
+function ringNormal(ring) {
+  const m = ring.rotM || basisFromEuler(ring.rotX, ring.rotY, ring.rotZ);
+  // local +Y maps to the second column of the rotation matrix
+  const n = [m[1], m[4], m[7]];
+  const len = Math.hypot(...n) || 1;
+  return n.map((v) => v / len);
+}
+
 const FRAMING_VAULT = (() => {
   const files = [];
   for (let i = 0; i < 8; i++) files.push(`Top${i}/n.md`);
@@ -412,4 +421,87 @@ test("cameraFit responds to aspect ratio", () => {
   assert.ok(tall.distance > wide.distance, "a tall viewport needs a further camera");
   assert.ok(wide.distance > 0 && Number.isFinite(wide.distance));
   assert.equal(cameraFit(0, 52, 1.6).distance > 0, true, "zero extent must not produce NaN");
+});
+
+// ---- motion: rings must visibly move, not just spin in place -------------------------
+
+test("spinning a circle about its own axis is invisible (why the rings looked static)", () => {
+  // Regression, stated as the invariant that matters. A full circle maps onto itself under a
+  // rotation about its own axis, so the *silhouette* does not change even though individual points
+  // move. The old animation only advanced ring.spin, which is why only the camera appeared to move.
+  const L = layout(buildTree(["A/a.md", "B/b.md"], {}), [], {});
+  const ring = L.rings[0];
+  const sample = (r) => {
+    const pts = ringPoints(r, 24);
+    return Array.from({ length: 24 }, (_, i) => [pts[i * 3], pts[i * 3 + 1], pts[i * 3 + 2]]);
+  };
+  const spatial = (set, axis) => set.map((p) => p[0] * axis[0] + p[1] * axis[1] + p[2] * axis[2]).sort((a, b) => a - b);
+
+  const before = sample(ring);
+  ring.spin = 1.3;
+  const after = sample(ring);
+
+  // points do move...
+  let moved = 0;
+  for (let i = 0; i < 24; i++) {
+    if (Math.hypot(before[i][0] - after[i][0], before[i][1] - after[i][1], before[i][2] - after[i][2]) > 1e-3) moved++;
+  }
+  assert.ok(moved > 20, "individual points move when spun");
+
+  // ...but the shape is identical: the signed extents along the ring's own normal are unchanged
+  const normal = ringNormal(ring);
+  const a = spatial(before, normal), b = spatial(after, normal);
+  assert.ok(Math.abs(a[0] - b[0]) < 1e-6 && Math.abs(a[23] - b[23]) < 1e-6,
+    "spinning leaves the silhouette unchanged, which is why it reads as static");
+});
+
+test("precession actually moves the ring's silhouette", () => {
+  const L = layout(buildTree(["A/a.md", "B/b.md"], {}), [], {});
+  const ring = L.rings[0];
+  const before = ringPoints(ring, 24);
+  precessRing(ring, 0.45);
+  const after = ringPoints(ring, 24);
+  let moved = 0;
+  for (let i = 0; i < before.length; i += 3) {
+    if (Math.hypot(before[i] - after[i], before[i + 1] - after[i + 1], before[i + 2] - after[i + 2]) > 1e-3) moved++;
+  }
+  assert.equal(moved, 24, "every point of the ring must move under precession");
+});
+
+test("precession preserves the radius, so rings never drift into each other's gap", () => {
+  const L = layout(buildTree(["A/a.md", "B/b.md", "C/c.md"], {}), [], {});
+  for (const ring of L.rings) {
+    const r0 = ringPoints(ring, 8);
+    const d0 = Math.hypot(r0[0], r0[1], r0[2]);
+    for (let step = 0; step < 40; step++) {
+      precessRing(ring, 0.13);
+      const pts = ringPoints(ring, 8);
+      for (let i = 0; i < pts.length; i += 3) {
+        const d = Math.hypot(pts[i], pts[i + 1], pts[i + 2]);
+        assert.ok(Math.abs(d - d0) < 1e-4, `radius drifted after ${step} precessions: ${d} vs ${d0}`);
+      }
+    }
+  }
+});
+
+test("a ring's precession axis is a unit vector and speeds differ between rings", () => {
+  const files = [];
+  for (let i = 0; i < 6; i++) files.push(`T${i}/n.md`);
+  const L = layout(buildTree(files, { maxDepth: 1 }), [], {});
+  for (const r of L.rings) {
+    const m = Math.hypot(...r.precAxis);
+    assert.ok(Math.abs(m - 1) < 1e-6, `axis must be unit length, got ${m}`);
+    assert.ok(r.precSpeed !== 0, "every ring must actually move");
+  }
+  const speeds = L.rings.map((r) => Math.abs(r.precSpeed).toFixed(3));
+  assert.ok(new Set(speeds).size > L.rings.length * 0.7, "rings must not all tumble at the same rate");
+});
+
+test("the matrix path reproduces the Euler path exactly", () => {
+  const L = layout(buildTree(["A/a.md", "B/b.md"], {}), [], {});
+  const ring = L.rings[0];
+  const euler = ringPoints(ring, 16);
+  ring.rotM = basisFromEuler(ring.rotX, ring.rotY, ring.rotZ);
+  const matrix = ringPoints(ring, 16);
+  for (let i = 0; i < euler.length; i++) assert.ok(Math.abs(euler[i] - matrix[i]) < 1e-9);
 });

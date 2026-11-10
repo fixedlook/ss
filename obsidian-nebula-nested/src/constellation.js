@@ -8,7 +8,7 @@ import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
-import { ringPoints, tiltPoint, cameraFit } from "./layout.js";
+import { ringPoints, tiltPoint, cameraFit, precessRing } from "./layout.js";
 
 export const DEFAULTS = {
   // look
@@ -17,7 +17,7 @@ export const DEFAULTS = {
   quality: "high", saveGpu: true,
   // structure (these change the layout, so the view rebuilds when they change)
   maxDepth: 3, maxRings: 120, showRootNotes: false, wedgeArcs: true, depthFade: true, spacing: 1,
-  ringSpin: 0.55, coreStyle: "orb",
+  ringSpin: 1.0, coreStyle: "orb",
 };
 
 const SWATCHES = [["Green", "#2cf27f"], ["White", "#ffffff"], ["Ice", "#9fdcff"], ["Violet", "#b38cff"], ["Amber", "#ffc46b"], ["Rose", "#ff8fa3"]];
@@ -245,6 +245,18 @@ export class Constellation {
     g.fillStyle = r; g.fillRect(0, 0, 64, 64); return new THREE.CanvasTexture(c);
   }
 
+  /** rewrite link endpoints from the live node positions (called while rings precess) */
+  _refreshLinks() {
+    if (!this.linkGeo) return;
+    const arr = this.linkGeo.attributes.position.array, P = this.L.pos;
+    for (let i = 0; i < this.edges.length; i++) {
+      const [x, y] = this.edges[i];
+      arr[i * 6] = P[x * 3]; arr[i * 6 + 1] = P[x * 3 + 1]; arr[i * 6 + 2] = P[x * 3 + 2];
+      arr[i * 6 + 3] = P[y * 3]; arr[i * 6 + 4] = P[y * 3 + 1]; arr[i * 6 + 5] = P[y * 3 + 2];
+    }
+    this.linkGeo.attributes.position.needsUpdate = true;
+  }
+
   _linkColors() {
     const a = this.linkGeo.attributes.color.array, c = this.color;
     for (let i = 0; i < this.linkFade.length; i++) { const f = this.linkFade[i]; a[i * 3] = c.r * f; a[i * 3 + 1] = c.g * f; a[i * 3 + 2] = c.b * f; }
@@ -296,7 +308,7 @@ export class Constellation {
       mk("", e, "span").textContent = ring.count === ring.descendants ? `${ring.count} note${ring.count === 1 ? "" : "s"}` : `${ring.descendants} notes · ${ring.count} here`;
       e.title = `${ring.folder}\nlevel ${ring.level}`;
       e.addEventListener("click", () => this.focusSlot(ring.slot));
-      return { el: e, ring };
+      return { el: e, ring, mid: (ring.arc[0] + ring.arc[1]) / 2 };
     });
     this.tip = mk("nebula-tip"); this.tip.classList.add("is-hidden");
     const d = this.L.depths;
@@ -382,7 +394,7 @@ export class Constellation {
     slider("Light beads", "beads", 0, MAX_BEADS, 10);
     slider("Bead speed", "beadSpeed", 0.1, 4, 0.1);
     slider("Spin (scene)", "spin", 0, 2, 0.05);
-    slider("Orbit spin", "ringSpin", 0, 3, 0.05);
+    slider("Ring motion", "ringSpin", 0, 3, 0.05);
     toggle("Comets", "comets"); toggle("Pulse", "pulse"); toggle("Stars", "stars");
     toggle("Folder names", "labels"); toggle("Save GPU in background", "saveGpu");
 
@@ -593,8 +605,13 @@ export class Constellation {
     if (this.s.labels) {
       const dist = cam.position.distanceTo(c.target);
       const zf = Math.min(1, Math.max(0, (this.far * 3.2 - dist) / (this.far * 1.6)));
-      for (const { el, ring } of this.hubLabels) {
-        this._project(ring.slot, tmp);
+      const anchor = (this._anchor = this._anchor || new THREE.Vector3());
+      const aout = (this._aout = this._aout || [0, 0, 0]);
+      for (const { el, ring, mid } of this.hubLabels) {
+        // the label rides its ring, so it must be re-anchored as the ring precesses
+        tiltPoint(Math.cos(mid) * ring.radius, 0, Math.sin(mid) * ring.radius, ring, aout);
+        anchor.fromArray(aout).project(cam);
+        tmp.copy(anchor);
         const cd = cam.position.distanceTo(hv.fromArray(this.L.pos, ring.slot * 3));
         const near = cd < this.far * 1.2;
         if (tmp.z > 1 || tmp.z < -1 || !near || zf <= 0.02) { el.classList.add("is-off"); continue; }
@@ -605,20 +622,26 @@ export class Constellation {
       }
     }
 
-    // rings drift: each ring spins around its own axis at its own speed and direction.
-    // Nodes are children of their ring, so they have to be re-placed with it.
+    // Rings precess: their planes slowly tumble about their own axes. Spinning a circle about its
+    // own axis is a no-op (the circle looks identical), which is why "the rings are not spinning"
+    // — only the camera was moving. Precession actually changes the ring's silhouette.
     if (!this.reduced && this.s.ringSpin > 0) {
+      let moved = false;
       for (let i = 0; i < this.ringLocal.length; i++) {
         const ring = this.ringLocal[i];
-        const speed = (ring.orbitSpeed || 0) * this.s.ringSpin;
-        if (!speed) continue;
-        ring.spin = (ring.spin || 0) + speed * dt / 1000;
+        const prec = (ring.precSpeed || 0) * this.s.ringSpin;
+        const spin = (ring.orbitSpeed || 0) * this.s.ringSpin;
+        if (!prec && !spin) continue;
+        if (prec) precessRing(ring, prec * dt / 1000);
+        if (spin) ring.spin = (ring.spin || 0) + spin * dt / 1000;
+
         const arc = this.ringArc[i];
         const pts = arc ? ringPoints(ring, arc[2], [arc[0], arc[1]]) : ringPoints(ring, this.ringPts[i].length / 3);
         const attr = this.ringLines[i].geometry.attributes.position;
         attr.array.set(pts); attr.needsUpdate = true;
         this.ringPts[i] = pts;
-        // re-place this ring's stars (they are stored with their local ring coordinates)
+
+        // stars are children of their ring, so re-place them with it
         const local = this.nodeLocal[i];
         if (local) {
           const P = this.L.pos, out = [0, 0, 0];
@@ -626,10 +649,15 @@ export class Constellation {
             tiltPoint(Math.cos(th) * r, y, Math.sin(th) * r, ring, out);
             P[slot * 3] = out[0]; P[slot * 3 + 1] = out[1]; P[slot * 3 + 2] = out[2];
           }
-          this.points.geometry.attributes.position.needsUpdate = true;
+          moved = true;
         }
       }
-      // comets ride the rings, so re-point them at the fresh geometry
+      if (moved) {
+        this.points.geometry.attributes.position.needsUpdate = true;
+        // link endpoints are baked from node positions, so they have to follow too
+        if (this.edges.length) this._refreshLinks();
+      }
+      // comets ride their rings
       for (const cm of this.comets) {
         const idx = this.cometRing.get(cm);
         if (idx != null) cm.lp = this.ringPts[idx];
