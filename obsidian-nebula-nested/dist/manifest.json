@@ -1,0 +1,9 @@
+{
+  "id": "nebula-nested",
+  "name": "Nebula Nested",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "See your vault as a glowing 3D orrery: a hub, one orbit ring per folder AND subfolder (nested), every note a star, every link a line of light.",
+  "author": "forked from 7evyr/obsidian-nebula",
+  "isDesktopOnly": true
+}

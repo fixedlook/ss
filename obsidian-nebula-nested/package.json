@@ -1,0 +1,18 @@
+{
+  "name": "obsidian-nebula-nested",
+  "version": "0.1.0",
+  "description": "Nested-orbit constellation view of an Obsidian vault (fork of obsidian-nebula).",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "build": "esbuild src/main.js --bundle --format=cjs --platform=browser --target=es2020 --minify --external:obsidian --outfile=dist/main.js --log-level=warning && npm run assets",
+    "assets": "node -e \"const fs=require('fs');fs.mkdirSync('dist',{recursive:true});for(const f of ['manifest.json','styles.css'])fs.copyFileSync(f,'dist/'+f)\"",
+    "test": "node --test test/*.test.js",
+    "check": "node --check src/model.js && node --check src/layout.js"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12",
+    "three": "0.185.1"
+  },
+  "type": "module"
+}
