@@ -141,8 +141,14 @@ export default class NebulaNested extends Plugin {
           includeRootNotes: true,
         });
         const text = outline(tree) + (tree.truncated ? `\n… ${tree.truncated} smaller rings hidden by "Max rings"` : "");
-        await navigator.clipboard.writeText(text);
-        new Notice(`Nebula: outline copied — ${tree.order.length} rings, ${notePaths.length} notes`);
+        try {
+          await navigator.clipboard.writeText(text);
+          new Notice(`Nebula: outline copied — ${tree.order.length} rings, ${notePaths.length} notes`);
+        } catch (err) {
+          console.warn("[Nebula Nested] clipboard unavailable", err);
+          new Notice("Nebula: could not reach the clipboard — outline printed to the console instead");
+          console.log(text);
+        }
       },
     });
   }
