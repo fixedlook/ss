@@ -73,10 +73,10 @@ export function layout(tree, links = [], opt = {}) {
   const spacing = opt.spacing == null ? 1 : opt.spacing; // user-facing "ring spacing"
   const perLevel = (opt.perLevel == null ? 7.5 : opt.perLevel) * spacing;
   const hoopScale = opt.hoopScale == null ? 0.85 : opt.hoopScale; // hoop size vs shell distance
-  const gap = (size) => (opt.gapBase == null ? 6.5 : opt.gapBase) + Math.sqrt(size) * 2.2 * spacing;
-  const childPad = (opt.childPad == null ? 4.5 : opt.childPad) * spacing;
-  const childStep = (opt.childStep == null ? 2.4 : opt.childStep) * spacing;
-  const L_minSep = (opt.minRadiusGap == null ? 2.6 : opt.minRadiusGap) * spacing;
+  const gap = (size) => (opt.gapBase == null ? 4.2 : opt.gapBase) + Math.sqrt(size) * 1.5 * spacing;
+  const childPad = (opt.childPad == null ? 3.4 : opt.childPad) * spacing;
+  const childStep = (opt.childStep == null ? 1.8 : opt.childStep) * spacing;
+  const L_minSep = (opt.minRadiusGap == null ? 2.2 : opt.minRadiusGap) * spacing;
 
   const nodes = tree.nodes;
   const folders = tree.order;
@@ -131,8 +131,8 @@ export function layout(tree, links = [], opt = {}) {
       let R;
       let offset = null;
       if (lv === 1) {
-        if (i === 0) acc = coreRadius * 1.22;
-        R = acc + Math.sqrt(size) * 2.2;
+        if (i === 0) acc = coreRadius * 1.16;
+        R = acc + Math.sqrt(size) * 1.5;
         acc = R + gap(size);
       } else {
         // children sit just outside their parent's ring, staggered among siblings
@@ -255,14 +255,15 @@ export function layout(tree, links = [], opt = {}) {
   }
   for (let s = 1; s <= N; s++) aSize[s] = (1.3 + Math.min(4.2, Math.sqrt(deg[s]) * 0.8)) * scale;
 
-  const maxR = rings.reduce((m, r) => Math.max(m, Math.hypot(r.cx, r.cy, r.cz) + r.radius), coreRadius * 2);
-  const far = Math.max(60, maxR * 1.15);
+  // true bounding radius: the camera is fitted to this instead of guessing a multiple
+  const maxExtent = rings.reduce((m, r) => Math.max(m, Math.hypot(r.cx, r.cy, r.cz) + r.radius), coreRadius * 1.5);
+  const far = Math.max(60, maxExtent * 1.15);
 
   return {
     pos, aSize, phase, total, edges, deg,
     notes: noteList.map(([p]) => p), slotToNote, noteSlot, localByRing,
     rings, ringOf, radius: new Map(folders.map((f) => [f, nodes.get(f).radius || ringOf.get(f).radius])),
-    far, scale, coreRadius,
+    far, maxExtent, scale, coreRadius,
     depths: {
       levels: rings.reduce((m, r) => Math.max(m, r.level), 0),
       rings: rings.length,
@@ -270,6 +271,25 @@ export function layout(tree, links = [], opt = {}) {
       loose: (tree.loose || []).length,
     },
   };
+}
+
+/**
+ * Distance at which a sphere of `extent` exactly fills the frustum, plus a margin.
+ * Pure math so the framing is testable — camera distance had been a guessed multiple of the scene
+ * size, which cropped the outer rings on tall windows and left them tiny on wide ones.
+ *
+ * @param {number} extent   bounding radius of the scene
+ * @param {number} fovDeg   vertical field of view in degrees
+ * @param {number} aspect   viewport width / height
+ * @param {number} margin   fraction of slack (1.18 = 18% padding)
+ * @returns {{distance:number, fitRadius:number}}
+ */
+export function cameraFit(extent, fovDeg = 52, aspect = 1.6, margin = 1.18) {
+  const fitRadius = Math.max(1e-3, extent) * margin;
+  const vFov = (fovDeg * Math.PI) / 180;
+  const hFov = 2 * Math.atan(Math.tan(vFov / 2) * Math.max(1e-3, aspect));
+  const distance = Math.max(fitRadius / Math.sin(vFov / 2), fitRadius / Math.sin(hFov / 2));
+  return { distance, fitRadius };
 }
 
 /**

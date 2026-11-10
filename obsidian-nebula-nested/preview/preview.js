@@ -29894,7 +29894,10 @@ void main() {
     const spacing = opt.spacing == null ? 1 : opt.spacing;
     const perLevel = (opt.perLevel == null ? 7.5 : opt.perLevel) * spacing;
     const hoopScale = opt.hoopScale == null ? 0.85 : opt.hoopScale;
-    const elevation = opt.elevation == null ? 1.35 : opt.elevation;
+    const gap = (size) => (opt.gapBase == null ? 4.2 : opt.gapBase) + Math.sqrt(size) * 1.5 * spacing;
+    const childPad = (opt.childPad == null ? 3.4 : opt.childPad) * spacing;
+    const childStep = (opt.childStep == null ? 1.8 : opt.childStep) * spacing;
+    const L_minSep = (opt.minRadiusGap == null ? 2.2 : opt.minRadiusGap) * spacing;
     const nodes = tree2.nodes;
     const folders = tree2.order;
     const sizeOf = (f) => Math.max(1, nodes.get(f).descendants || nodes.get(f).notes.length || 1);
@@ -29918,49 +29921,74 @@ void main() {
     process(ROOT, start, TAU);
     const rings = [];
     const ringOf = /* @__PURE__ */ new Map();
+    const byLevelRings = /* @__PURE__ */ new Map();
     for (const f of folders) {
-      const n = nodes.get(f);
-      const lv = n.level;
-      const hoopR = clamp2(perLevel * hoopScale * Math.sqrt(sizeOf(f)) * 1.15, perLevel * 0.7, perLevel * 3.4);
-      const shellBase = coreRadius * 1.08 + (lv - 1) * (perLevel * 1.5) + perLevel * 0.9;
-      const shellD = shellBase + hoopR * 0.5 + unit("sd:" + f) * perLevel * 0.35;
-      const bearing = n.angle + (unit("bj:" + f) - 0.5) * 0.22;
-      const el = (unit("el:" + f) - 0.5) * elevation + (lv % 2 ? 0.12 : -0.12);
-      const cosEl = Math.cos(el);
-      const ring = {
-        folder: f,
-        name: n.name,
-        radius: hoopR,
-        shellD,
-        level: lv,
-        parent: n.parent,
-        count: n.notes.length,
-        descendants: n.descendants,
-        arc: [n.wedge[0], n.wedge[1]],
-        bearing,
-        elevation: el,
-        // three independent rotations: a genuinely arbitrary plane, not a tilt off flat
-        rotX: unit("rx:" + f) * Math.PI * 0.95,
-        rotY: unit("ry:" + f) * TAU,
-        rotZ: unit("rz:" + f) * Math.PI * 0.95,
-        spin: 0,
-        orbitSpeed: (unit("spin:" + f) - 0.5) * 0.5,
-        orbitPhase: unit("phase:" + f) * TAU,
-        cx: Math.cos(bearing) * cosEl * shellD,
-        cy: Math.sin(el) * shellD * 0.62,
-        cz: Math.sin(bearing) * cosEl * shellD,
-        slot: -1
-      };
-      const sibs = rings.filter((o) => o.parent === n.parent && o.level === lv);
-      for (let guard = 0; guard < 10; guard++) {
-        const clash = sibs.some((o) => Math.abs(o.cy - ring.cy) < shellD * 0.12 && Math.abs((o.rotX - ring.rotX + Math.PI * 3) % TAU - Math.PI) < 0.35);
-        if (!clash) break;
-        ring.rotX = (ring.rotX + 0.618034 * Math.PI) % Math.PI;
-        ring.cy += (unit("cy:" + f + guard) < 0.5 ? -1 : 1) * shellD * 0.16;
+      const lv = nodes.get(f).level;
+      if (!byLevelRings.has(lv)) byLevelRings.set(lv, []);
+      byLevelRings.get(lv).push(f);
+    }
+    const levelsSorted = [...byLevelRings.keys()].sort((a, b) => a - b);
+    for (const lv of levelsSorted) {
+      const list = byLevelRings.get(lv);
+      list.sort((a, b) => sizeOf(b) - sizeOf(a) || a.localeCompare(b));
+      let acc = 0;
+      list.forEach((f, i) => {
+        const n = nodes.get(f);
+        const size = sizeOf(f);
+        let R;
+        let offset = null;
+        if (lv === 1) {
+          if (i === 0) acc = coreRadius * 1.16;
+          R = acc + Math.sqrt(size) * 1.5;
+          acc = R + gap(size);
+        } else {
+          const parentRing = ringOf.get(n.parent);
+          const base = parentRing ? parentRing.radius : coreRadius * 2;
+          const sib = (tree2.siblings.get(n.parent) || []).indexOf(f);
+          R = base + childPad + Math.max(0, sib) * childStep;
+          offset = base;
+        }
+        const ring = {
+          folder: f,
+          name: n.name,
+          radius: R,
+          level: lv,
+          parent: n.parent,
+          count: n.notes.length,
+          descendants: n.descendants,
+          arc: [n.wedge[0], n.wedge[1]],
+          // arbitrary 3D orientation. Pitch is kept away from 0 and 90 degrees so rings read as
+          // ellipses rather than flat lines or perfect circles.
+          rotX: 0.22 + unit("rx:" + f) * 1.05,
+          rotY: unit("ry:" + f) * TAU,
+          rotZ: (unit("rz:" + f) - 0.5) * 0.5,
+          spin: 0,
+          orbitSpeed: (unit("spin:" + f) - 0.5) * 0.6,
+          orbitPhase: unit("phase:" + f) * TAU,
+          // concentric: the ring's plane passes through the hub, which is fine at varied radii
+          cx: 0,
+          cy: 0,
+          cz: 0,
+          slot: -1
+        };
+        const sibs = (byLevelRings.get(lv) || []).filter((o) => o !== f && ringOf.has(o)).map((o) => ringOf.get(o)).filter((o) => o.parent === n.parent);
+        for (let guard = 0; guard < 8; guard++) {
+          const clash = sibs.some((o) => Math.abs(o.radius - ring.radius) < 1.5 && Math.abs(o.rotX - ring.rotX) < 0.3);
+          if (!clash) break;
+          ring.rotX = 0.22 + ((ring.rotX - 0.22) / 1.05 + 0.618034) % 1 * 1.05;
+        }
+        if (sibs.length && unit("dir:" + f) < 0.5) ring.orbitSpeed = -ring.orbitSpeed;
+        rings.push(ring);
+        ringOf.set(f, ring);
+      });
+    }
+    {
+      const minSep = Math.max(2.2, L_minSep);
+      const ordered = rings.slice().sort((a, b) => a.radius - b.radius || a.level - b.level || a.folder.localeCompare(b.folder));
+      for (let i = 1; i < ordered.length; i++) {
+        const prev = ordered[i - 1], cur = ordered[i];
+        if (cur.radius - prev.radius < minSep) cur.radius = prev.radius + minSep + (unit("sep:" + cur.folder) - 0.5) * 0.4;
       }
-      if (sibs.length && unit("dir:" + f) < 0.5) ring.orbitSpeed = -ring.orbitSpeed;
-      rings.push(ring);
-      ringOf.set(f, ring);
     }
     const noteList = [];
     for (const f of folders) for (const p of nodes.get(f).notes) noteList.push([p, f]);
@@ -30020,8 +30048,8 @@ void main() {
       deg[y]++;
     }
     for (let s = 1; s <= N; s++) aSize[s] = (1.3 + Math.min(4.2, Math.sqrt(deg[s]) * 0.8)) * scale;
-    const maxR = rings.reduce((m, r) => Math.max(m, Math.hypot(r.cx, r.cy, r.cz) + r.radius), coreRadius * 2);
-    const far = Math.max(60, maxR * 1.15);
+    const maxExtent = rings.reduce((m, r) => Math.max(m, Math.hypot(r.cx, r.cy, r.cz) + r.radius), coreRadius * 1.5);
+    const far = Math.max(60, maxExtent * 1.15);
     return {
       pos,
       aSize,
@@ -30037,6 +30065,7 @@ void main() {
       ringOf,
       radius: new Map(folders.map((f) => [f, nodes.get(f).radius || ringOf.get(f).radius])),
       far,
+      maxExtent,
       scale,
       coreRadius,
       depths: {
@@ -30046,6 +30075,13 @@ void main() {
         loose: (tree2.loose || []).length
       }
     };
+  }
+  function cameraFit(extent, fovDeg = 52, aspect2 = 1.6, margin = 1.18) {
+    const fitRadius = Math.max(1e-3, extent) * margin;
+    const vFov = fovDeg * Math.PI / 180;
+    const hFov = 2 * Math.atan(Math.tan(vFov / 2) * Math.max(1e-3, aspect2));
+    const distance = Math.max(fitRadius / Math.sin(vFov / 2), fitRadius / Math.sin(hFov / 2));
+    return { distance, fitRadius };
   }
   function ringPoints(ring, seg = 200, range) {
     const out = new Float32Array(seg * 3);
@@ -30064,42 +30100,28 @@ void main() {
   function auditLayout(L2, minGap = 1) {
     const problems2 = [];
     const { rings } = L2;
-    const TAU2 = Math.PI * 2;
     for (const r of rings) {
-      if (![r.radius, r.rotX, r.rotY, r.rotZ, r.cx, r.cy, r.cz].every(Number.isFinite)) {
+      if (![r.radius, r.rotX, r.rotY, r.rotZ].every(Number.isFinite)) {
         problems2.push(`ring ${r.folder} has a non-finite transform`);
         continue;
       }
-      const centreDist = Math.hypot(r.cx, r.cy, r.cz);
-      if (centreDist - r.radius < L2.coreRadius * 0.55) {
-        problems2.push(`ring ${r.folder} passes through the core (${(centreDist - r.radius).toFixed(1)} vs core ${L2.coreRadius})`);
-      }
+      if (r.radius <= L2.coreRadius) problems2.push(`ring ${r.folder} is inside the core (${r.radius.toFixed(1)} <= ${L2.coreRadius})`);
       if (!(r.arc[1] > r.arc[0])) problems2.push(`ring ${r.folder} has an empty arc`);
     }
-    const byLevel = /* @__PURE__ */ new Map();
-    for (const r of rings) {
-      if (!byLevel.has(r.level)) byLevel.set(r.level, []);
-      byLevel.get(r.level).push(Math.hypot(r.cx, r.cy, r.cz) - r.radius);
-    }
-    const levels = [...byLevel.keys()].sort((a, b) => a - b);
-    for (let i = 1; i < levels.length; i++) {
-      const inner = Math.min(...byLevel.get(levels[i - 1]));
-      const outer = Math.min(...byLevel.get(levels[i]));
-      if (outer < inner - 1e-9) problems2.push(`level ${levels[i]} sinks inside level ${levels[i - 1]}`);
-    }
-    const seen = /* @__PURE__ */ new Map();
-    for (const r of rings) {
-      const key = [r.radius, r.rotX, r.rotY, r.rotZ, r.cx, r.cy, r.cz].map((v) => v.toFixed(2)).join("|");
-      if (seen.has(key)) problems2.push(`rings ${seen.get(key)} and ${r.folder} are identical`);
-      seen.set(key, r.folder);
+    const sorted = rings.slice().sort((a, b) => a.radius - b.radius);
+    for (let i = 1; i < sorted.length; i++) {
+      const d = sorted[i].radius - sorted[i - 1].radius;
+      if (d < minGap) problems2.push(`rings ${sorted[i - 1].folder} and ${sorted[i].folder} share a radius (R ${sorted[i].radius.toFixed(1)}, gap ${d.toFixed(2)})`);
     }
     if (rings.length >= 4) {
-      for (const axis of ["rotX", "rotZ"]) {
+      for (const axis of ["rotX", "rotY"]) {
         const vals = rings.map((r) => r[axis]);
-        if (Math.max(...vals) - Math.min(...vals) < 0.3) problems2.push(`hoops barely vary in ${axis}`);
+        if (Math.max(...vals) - Math.min(...vals) < 0.3) problems2.push(`rings barely vary in ${axis}`);
       }
-      const heights = rings.map((r) => r.cy);
-      if (Math.max(...heights) - Math.min(...heights) < 1) problems2.push("every hoop sits at the same height");
+    }
+    if (rings.length) {
+      const inner = Math.min(...rings.map((r) => r.radius));
+      if (inner > L2.coreRadius * 2.2) problems2.push(`innermost ring is detached from the hub (R ${inner.toFixed(1)} vs core ${L2.coreRadius})`);
     }
     for (let i = 0; i < L2.pos.length; i++) {
       if (!Number.isFinite(L2.pos[i])) {
@@ -30114,11 +30136,11 @@ void main() {
   var DEFAULTS = {
     // look
     color: "#2cf27f",
-    glow: 0.4,
-    glowSize: 0.28,
-    nodeSize: 1,
-    links: 1.25,
-    rings: 0.9,
+    glow: 0.38,
+    glowSize: 0.3,
+    nodeSize: 0.95,
+    links: 1.15,
+    rings: 1,
     beads: 420,
     beadSpeed: 1,
     comets: true,
@@ -30136,8 +30158,7 @@ void main() {
     depthFade: true,
     spacing: 1,
     ringSpin: 0.55,
-    coreStyle: "orb",
-    hoopScale: 0.85
+    coreStyle: "orb"
   };
   var SWATCHES = [["Green", "#2cf27f"], ["White", "#ffffff"], ["Ice", "#9fdcff"], ["Violet", "#b38cff"], ["Amber", "#ffc46b"], ["Rose", "#ff8fa3"]];
   var QUALITY = { fast: 1, high: 1.75, max: 2.5 };
@@ -30149,7 +30170,9 @@ void main() {
   varying float vBoost; varying float vFade;
   void main() {
     vec4 mv = modelViewMatrix * vec4(position, 1.0);
-    float pulse = 1.0 + uPulse * 0.18 * sin(uTime * 1.6 + aPhase);
+    // two out-of-phase sines read as a twinkle instead of a breathing pulse
+    float twinkle = sin(uTime * 1.1 + aPhase) * 0.5 + sin(uTime * 2.3 + aPhase * 1.7) * 0.5;
+    float pulse = 1.0 + uPulse * (0.10 * twinkle + 0.06 * sin(uTime * 1.6 + aPhase));
     gl_PointSize = aSize * uSizeMul * pulse * (1.0 + aBoost * 0.9) * uScale / -mv.z;
     vBoost = aBoost; vFade = clamp(1.25 - (-mv.z) / 1200.0, 0.45, 1.0);
     gl_Position = projectionMatrix * mv;
@@ -30159,10 +30182,16 @@ void main() {
   void main() {
     float d = length(gl_PointCoord - 0.5);
     if (d > 0.5) discard;
-    float halo = pow(1.0 - d * 2.0, 2.2);
-    float core = smoothstep(0.16, 0.0, d);
-    vec3 col = uColor * (halo * 0.5) + vec3(1.0) * core * (0.3 + vBoost * 0.7);
-    gl_FragColor = vec4(col * vFade * (0.7 + vBoost * 0.8), halo * vFade * 0.8);
+    float halo = pow(1.0 - d * 2.0, 1.7);
+    float core = smoothstep(0.22, 0.0, d);
+    float spike = 0.0;
+    // a faint diffraction cross on the brighter nodes only (vBoost > 0), for a real star look
+    if (vBoost > 0.05) {
+      float ax = abs(gl_PointCoord.x - 0.5), ay = abs(gl_PointCoord.y - 0.5);
+      spike = (smoothstep(0.02, 0.0, ax) + smoothstep(0.02, 0.0, ay)) * (1.0 - d * 2.0) * vBoost * 0.5;
+    }
+    vec3 col = uColor * (halo * 0.55) + vec3(1.0) * core * (0.3 + vBoost * 0.7) + vec3(1.0) * spike;
+    gl_FragColor = vec4(col * vFade * (0.75 + vBoost * 0.8), (halo * 0.85 + spike) * vFade);
   }`;
   var _Constellation = class _Constellation {
     /**
@@ -30247,13 +30276,13 @@ void main() {
         g.setAttribute("position", new BufferAttribute(pts, 3));
         const depth = L2.depths.levels > 1 ? (ring.level - 1) / Math.max(1, L2.depths.levels - 1) : 0;
         const fade = this.s.depthFade ? 1 - 0.55 * depth : 1;
-        const mat = new LineBasicMaterial({ color, transparent: true, opacity: 0.2 * fade, blending: AdditiveBlending, depthWrite: false });
+        const mat = new LineBasicMaterial({ color, transparent: true, opacity: 0.26 * fade, blending: AdditiveBlending, depthWrite: false });
         const line = closed ? new LineLoop(g, mat) : new Line(g, mat);
         scene.add(line);
         this.ringLines.push(line);
         this.ringPts.push(pts);
         this.ringLocal.push(ring);
-        this.ringBase.push(0.2 * fade);
+        this.ringBase.push(0.26 * fade);
       }
       this.adj = /* @__PURE__ */ new Map();
       const edges = L2.edges.slice(0, 9e3);
@@ -30302,7 +30331,7 @@ void main() {
       scene.add(this.core);
       this.coreSize = Math.max(9, L2.coreRadius * 1);
       this.comets = [];
-      const TL = 30;
+      const TL = 44;
       const cometRings = L2.rings.slice().sort((a, b) => b.descendants - a.descendants).slice(0, 18).map((r2) => L2.rings.indexOf(r2));
       for (const i of cometRings) {
         const pts = this.ringPts[i];
@@ -30346,11 +30375,15 @@ void main() {
       comp.addPass(new OutputPass());
       comp.setSize(w, h);
       const far = this.far = L2.far;
+      this.sceneExtent = L2.maxExtent || L2.far;
       cam.far = far * 16;
       cam.updateProjectionMatrix();
       const c = this.controls = new TrackballControls(cam, r.domElement);
       Object.assign(c, { rotateSpeed: 2.6, zoomSpeed: 1.1, panSpeed: 0.7, staticMoving: false, dynamicDampingFactor: 0.1, minDistance: 6, maxDistance: far * 7 });
-      this.home = new Vector3(far * 0.18, far * 0.3, far * 1.28);
+      const { distance: dist } = cameraFit(L2.maxExtent || far, cam.fov, cam.aspect);
+      this.fitDistance = dist;
+      const elev = 0.3;
+      this.home = new Vector3(0, Math.sin(elev) * dist, Math.cos(elev) * dist);
       c.target.set(0, 0, 0);
       if (this.opts.camera && this.opts.camera.pos) {
         cam.position.fromArray(this.opts.camera.pos);
@@ -30569,7 +30602,6 @@ level ${ring.level}`;
       slider("Nesting depth", "maxDepth", 1, 6, 1, () => this.opts.onRebuild && this.opts.onRebuild());
       slider("Max rings", "maxRings", 6, 300, 1, () => this.opts.onRebuild && this.opts.onRebuild());
       slider("Ring spacing", "spacing", 0.5, 2, 0.05, () => this.opts.onRebuild && this.opts.onRebuild());
-      slider("Hoop size", "hoopScale", 0.4, 1.6, 0.05, () => this.opts.onRebuild && this.opts.onRebuild());
       toggle("Sub-ring arcs", "wedgeArcs", () => this.opts.onRebuild && this.opts.onRebuild());
       toggle("Depth fade", "depthFade", () => this.opts.onRebuild && this.opts.onRebuild());
       toggle("Root notes", "showRootNotes", () => this.opts.onRebuild && this.opts.onRebuild());
@@ -30734,6 +30766,12 @@ level ${ring.level}`;
       this.camera.aspect = w / h;
       this.camera.updateProjectionMatrix();
       this.uniforms.uScale.value = h * 0.62;
+      if (this.fitDistance && !this._fly && !this._down) {
+        const { distance: d } = cameraFit(this.L.maxExtent || this.far, this.camera.fov, this.camera.aspect);
+        this.fitDistance = d;
+        const elev = 0.3;
+        this.home.set(0, Math.sin(elev) * d, Math.cos(elev) * d);
+      }
       this.controls.handleResize && this.controls.handleResize();
     }
     focusSlot(slot) {
@@ -30803,7 +30841,7 @@ level ${ring.level}`;
       const cam = this.camera, c = this.controls;
       if (this.flying) {
         const k = (now - this.flyStart) / 2600;
-        cam.position.lerpVectors(this.home.clone().multiplyScalar(2.6), this.home, ease(k));
+        cam.position.lerpVectors(this.home.clone().multiplyScalar(1.9), this.home, ease(k));
         if (k >= 1) this.flying = false;
       }
       if (this._fly) {
@@ -30855,7 +30893,7 @@ level ${ring.level}`;
           const byLevel = ring.level === 1 ? 1 : ring.level === 2 ? 0.85 : 0.7;
           el.style.opacity = Math.min(1, byLevel * Math.min(1, (this.far * 1.2 - cd) / (this.far * 0.35))) * zf;
           el.classList.remove("is-off");
-          el.style.transform = `translate(${(tmp.x * 0.5 + 0.5) * w}px,${(-tmp.y * 0.5 + 0.5) * h}px) translate(-50%,-135%) scale(${ring.level === 1 ? 1 : 0.86})`;
+          el.style.transform = `translate(${(tmp.x * 0.5 + 0.5) * w}px,${(-tmp.y * 0.5 + 0.5) * h}px) translate(-50%,-155%) scale(${ring.level === 1 ? 1 : 0.82})`;
         }
       }
       if (!this.reduced && this.s.ringSpin > 0) {
@@ -30952,7 +30990,7 @@ level ${ring.level}`;
   // Constellation. If the save is still debounced when that happens, the new instance loads stale
   // settings and the change appears to "not save" (and the panel snaps shut). So persist those
   // synchronously; only cosmetic tweaks are debounced.
-  __publicField(_Constellation, "STRUCTURE", ["maxDepth", "maxRings", "showRootNotes", "wedgeArcs", "depthFade", "spacing", "coreStyle", "hoopScale"]);
+  __publicField(_Constellation, "STRUCTURE", ["maxDepth", "maxRings", "showRootNotes", "wedgeArcs", "depthFade", "spacing", "coreStyle"]);
   var Constellation = _Constellation;
 
   // src/preview.js

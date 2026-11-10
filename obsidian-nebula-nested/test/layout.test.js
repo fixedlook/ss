@@ -347,3 +347,69 @@ test("audit catches a detached nest", () => {
   const problems = auditLayout(L);
   assert.ok(problems.some((p) => /detached/.test(p)), `expected a detachment complaint, got ${JSON.stringify(problems)}`);
 });
+
+// ---- camera framing: the nest must fit the viewport at any aspect ratio ---------------
+import { cameraFit } from "../src/layout.js";
+
+/** project every ring point through a look-at-origin camera and return the worst NDC extent */
+function projectionExtent(L, fovDeg, aspect, elev = 0.30) {
+  const { distance: dist } = cameraFit(L.maxExtent, fovDeg, aspect);
+  const cam = [0, Math.sin(elev) * dist, Math.cos(elev) * dist];
+  const zAxis = [0 - cam[0], 0 - cam[1], 0 - cam[2]];
+  const zn = Math.hypot(...zAxis);
+  for (let i = 0; i < 3; i++) zAxis[i] /= zn;
+  const up = [0, 1, 0];
+  const xAxis = [up[1] * zAxis[2] - up[2] * zAxis[1], up[2] * zAxis[0] - up[0] * zAxis[2], up[0] * zAxis[1] - up[1] * zAxis[0]];
+  const xn = Math.hypot(...xAxis);
+  for (let i = 0; i < 3; i++) xAxis[i] /= xn;
+  const yAxis = [
+    zAxis[1] * xAxis[2] - zAxis[2] * xAxis[1],
+    zAxis[2] * xAxis[0] - zAxis[0] * xAxis[2],
+    zAxis[0] * xAxis[1] - zAxis[1] * xAxis[0],
+  ];
+  const vFov = (fovDeg * Math.PI) / 180;
+  const hFov = 2 * Math.atan(Math.tan(vFov / 2) * aspect);
+  let maxX = 0, maxY = 0;
+  for (const ring of L.rings) {
+    const pts = ringPoints(ring, 48);
+    for (let i = 0; i < pts.length; i += 3) {
+      const d = [pts[i] - cam[0], pts[i + 1] - cam[1], pts[i + 2] - cam[2]];
+      const zc = -(d[0] * zAxis[0] + d[1] * zAxis[1] + d[2] * zAxis[2]);
+      const xc = d[0] * xAxis[0] + d[1] * xAxis[1] + d[2] * xAxis[2];
+      const yc = d[0] * yAxis[0] + d[1] * yAxis[1] + d[2] * yAxis[2];
+      maxX = Math.max(maxX, Math.abs(xc / -zc / Math.tan(hFov / 2)));
+      maxY = Math.max(maxY, Math.abs(yc / -zc / Math.tan(vFov / 2)));
+    }
+  }
+  return { maxX, maxY, dist };
+}
+
+const FRAMING_VAULT = (() => {
+  const files = [];
+  for (let i = 0; i < 8; i++) files.push(`Top${i}/n.md`);
+  for (let s = 0; s < 3; s++) for (let j = 0; j < 4; j++) files.push(`Top${s}/Sub${j}/x.md`);
+  return files;
+})();
+
+test("the fitted camera keeps every ring inside the frame", () => {
+  const L = layout(buildTree(FRAMING_VAULT, { maxDepth: 3 }), [], { coreRadius: 26 });
+  for (const aspect of [0.7, 1.0, 1.6, 2.4, 3.2]) {
+    const { maxX, maxY } = projectionExtent(L, 52, aspect);
+    assert.ok(maxY < 0.98, `aspect ${aspect}: rings clip vertically (|ndcY| ${maxY.toFixed(3)})`);
+    assert.ok(maxX < 0.98, `aspect ${aspect}: rings clip horizontally (|ndcX| ${maxX.toFixed(3)})`);
+  }
+});
+
+test("the fitted camera is not wastefully far: the nest fills most of the frame", () => {
+  const L = layout(buildTree(FRAMING_VAULT, { maxDepth: 3 }), [], { coreRadius: 26 });
+  const { maxY } = projectionExtent(L, 52, 1.6);
+  assert.ok(maxY > 0.6, `nest is too small in frame (|ndcY| ${maxY.toFixed(3)}); it was 1.0+ (clipped) before the fit`);
+});
+
+test("cameraFit responds to aspect ratio", () => {
+  const wide = cameraFit(100, 52, 2.4);
+  const tall = cameraFit(100, 52, 0.7);
+  assert.ok(tall.distance > wide.distance, "a tall viewport needs a further camera");
+  assert.ok(wide.distance > 0 && Number.isFinite(wide.distance));
+  assert.equal(cameraFit(0, 52, 1.6).distance > 0, true, "zero extent must not produce NaN");
+});

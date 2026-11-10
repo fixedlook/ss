@@ -8,7 +8,7 @@ import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
-import { ringPoints, tiltPoint } from "./layout.js";
+import { ringPoints, tiltPoint, cameraFit } from "./layout.js";
 
 export const DEFAULTS = {
   // look
@@ -31,7 +31,9 @@ const POINT_VS = `
   varying float vBoost; varying float vFade;
   void main() {
     vec4 mv = modelViewMatrix * vec4(position, 1.0);
-    float pulse = 1.0 + uPulse * 0.18 * sin(uTime * 1.6 + aPhase);
+    // two out-of-phase sines read as a twinkle instead of a breathing pulse
+    float twinkle = sin(uTime * 1.1 + aPhase) * 0.5 + sin(uTime * 2.3 + aPhase * 1.7) * 0.5;
+    float pulse = 1.0 + uPulse * (0.10 * twinkle + 0.06 * sin(uTime * 1.6 + aPhase));
     gl_PointSize = aSize * uSizeMul * pulse * (1.0 + aBoost * 0.9) * uScale / -mv.z;
     vBoost = aBoost; vFade = clamp(1.25 - (-mv.z) / 1200.0, 0.45, 1.0);
     gl_Position = projectionMatrix * mv;
@@ -41,10 +43,16 @@ const POINT_FS = `
   void main() {
     float d = length(gl_PointCoord - 0.5);
     if (d > 0.5) discard;
-    float halo = pow(1.0 - d * 2.0, 2.2);
-    float core = smoothstep(0.16, 0.0, d);
-    vec3 col = uColor * (halo * 0.5) + vec3(1.0) * core * (0.3 + vBoost * 0.7);
-    gl_FragColor = vec4(col * vFade * (0.7 + vBoost * 0.8), halo * vFade * 0.8);
+    float halo = pow(1.0 - d * 2.0, 1.7);
+    float core = smoothstep(0.22, 0.0, d);
+    float spike = 0.0;
+    // a faint diffraction cross on the brighter nodes only (vBoost > 0), for a real star look
+    if (vBoost > 0.05) {
+      float ax = abs(gl_PointCoord.x - 0.5), ay = abs(gl_PointCoord.y - 0.5);
+      spike = (smoothstep(0.02, 0.0, ax) + smoothstep(0.02, 0.0, ay)) * (1.0 - d * 2.0) * vBoost * 0.5;
+    }
+    vec3 col = uColor * (halo * 0.55) + vec3(1.0) * core * (0.3 + vBoost * 0.7) + vec3(1.0) * spike;
+    gl_FragColor = vec4(col * vFade * (0.75 + vBoost * 0.8), (halo * 0.85 + spike) * vFade);
   }`;
 
 export class Constellation {
@@ -155,7 +163,7 @@ export class Constellation {
     this.coreSize = Math.max(9, L.coreRadius * 1.0);
 
     // ---- comets: one per ring, capped so huge vaults stay calm ------------
-    this.comets = []; const TL = 30;
+    this.comets = []; const TL = 44;
     const cometRings = L.rings.slice().sort((a, b) => b.descendants - a.descendants).slice(0, 18).map((r) => L.rings.indexOf(r));
     for (const i of cometRings) {
       const pts = this.ringPts[i];
@@ -197,11 +205,17 @@ export class Constellation {
 
     // ---- camera + trackball ------------------------------------------------
     const far = (this.far = L.far);
+    this.sceneExtent = L.maxExtent || L.far;
     cam.far = far * 16; cam.updateProjectionMatrix();
     const c = (this.controls = new TrackballControls(cam, r.domElement));
     Object.assign(c, { rotateSpeed: 2.6, zoomSpeed: 1.1, panSpeed: 0.7, staticMoving: false, dynamicDampingFactor: 0.1, minDistance: 6, maxDistance: far * 7 });
-    // frame the whole nest: the old home sat too low and too close and cropped the top rings
-    this.home = new THREE.Vector3(far * 0.12, far * 0.26, far * 1.12);
+    // Fit the camera to the scene's measured extent. cameraFit is pure and unit-tested, because
+    // guessing a multiple of `far` is what cropped the outer rings.
+    const { distance: dist } = cameraFit(L.maxExtent || far, cam.fov, cam.aspect);
+    this.fitDistance = dist;
+    // a gentle elevation so rings read as ellipses rather than circles
+    const elev = 0.30;
+    this.home = new THREE.Vector3(0, Math.sin(elev) * dist, Math.cos(elev) * dist);
     c.target.set(0, 0, 0);
     if (this.opts.camera && this.opts.camera.pos) {
       // coming back from a rebuild: keep the user where they were
@@ -479,6 +493,13 @@ export class Constellation {
     this.renderer.setSize(w, h); this.composer.setSize(w, h);
     this.camera.aspect = w / h; this.camera.updateProjectionMatrix();
     this.uniforms.uScale.value = h * 0.62;
+    // refit the default view when the aspect changes, unless the user has moved the camera
+    if (this.fitDistance && !this._fly && !this._down) {
+      const { distance: d } = cameraFit(this.L.maxExtent || this.far, this.camera.fov, this.camera.aspect);
+      this.fitDistance = d;
+      const elev = 0.30;
+      this.home.set(0, Math.sin(elev) * d, Math.cos(elev) * d);
+    }
     this.controls.handleResize && this.controls.handleResize();
   }
 
@@ -534,7 +555,7 @@ export class Constellation {
     const cam = this.camera, c = this.controls;
     if (this.flying) {
       const k = (now - this.flyStart) / 2600;
-      cam.position.lerpVectors(this.home.clone().multiplyScalar(2.6), this.home, ease(k));
+      cam.position.lerpVectors(this.home.clone().multiplyScalar(1.9), this.home, ease(k));
       if (k >= 1) this.flying = false;
     }
     if (this._fly) {
@@ -580,7 +601,7 @@ export class Constellation {
         const byLevel = ring.level === 1 ? 1 : ring.level === 2 ? 0.85 : 0.7;
         el.style.opacity = Math.min(1, byLevel * Math.min(1, (this.far * 1.2 - cd) / (this.far * 0.35))) * zf;
         el.classList.remove("is-off");
-        el.style.transform = `translate(${(tmp.x * 0.5 + 0.5) * w}px,${(-tmp.y * 0.5 + 0.5) * h}px) translate(-50%,-135%) scale(${ring.level === 1 ? 1 : 0.86})`;
+        el.style.transform = `translate(${(tmp.x * 0.5 + 0.5) * w}px,${(-tmp.y * 0.5 + 0.5) * h}px) translate(-50%,-155%) scale(${ring.level === 1 ? 1 : 0.82})`;
       }
     }
 

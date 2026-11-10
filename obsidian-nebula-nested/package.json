@@ -1,6 +1,6 @@
 {
   "name": "obsidian-nebula-nested",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Nested-orbit constellation view of an Obsidian vault (fork of obsidian-nebula).",
   "private": true,
   "license": "MIT",
