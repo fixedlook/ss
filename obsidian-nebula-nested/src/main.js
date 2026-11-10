@@ -64,8 +64,9 @@ class NebulaView extends ItemView {
     const app = this.app;
     this.built = this.shape();
 
-    // keep the camera where the user left it across a rebuild
+    // keep the camera and the panel state where the user left them across a rebuild
     const camera = this.c ? this.c.cameraState() : null;
+    const panelOpen = this.c ? this.c.panelOpen() : false;
     if (this.c) { this.c.destroy(); this.c = null; }
 
     // 1-3. folder tree + the links that survive pruning
@@ -90,6 +91,7 @@ class NebulaView extends ItemView {
     this.c = new Constellation(this.contentEl, { L, tree }, {
       settings: s,
       camera: camera || undefined,
+      panelOpen,
       onSettings: (next) => { this.plugin.data.settings = next; this.plugin.saveData(this.plugin.data); },
       onRebuild: () => this.rebuildSoon(),
       onFocus: () => this.plugin.toggleFocus(),

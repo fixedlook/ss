@@ -264,3 +264,65 @@ test("a link to a note in the same folder is kept and resolves to a real edge", 
   assert.equal(L.edges.length, 1);
   assert.equal(L.rings.length, 1);
 });
+
+// ---- regressions from real-device feedback --------------------------------------------
+
+test("rings are NOT coplanar: every ring gets its own 3D orientation", () => {
+  // the shipped bug: tilt was ±(0.15 + 0.055*level), so all top-level rings were ~9-11 degrees
+  const files = [];
+  for (let i = 0; i < 12; i++) files.push(`Top${i}/n.md`);
+  const t = buildTree(files, { maxDepth: 2 });
+  const L = layout(t, [], {});
+  const polars = L.rings.map((r) => r.polar);
+  const azims = L.rings.map((r) => r.azim);
+  const degrees = (v) => (v * 180) / Math.PI;
+
+  assert.ok(Math.max(...polars) - Math.min(...polars) > 0.5, "polar angles must spread out");
+  assert.ok(new Set(polars.map((p) => p.toFixed(3))).size > L.rings.length * 0.7, "most rings must have a distinct tilt");
+  assert.ok(new Set(azims.map((a) => a.toFixed(3))).size > L.rings.length * 0.7, "most rings must have a distinct azimuth");
+  for (const p of polars) assert.ok(degrees(p) > 10 && degrees(p) < 95, `tilt ${degrees(p)} out of range`);
+  assert.deepEqual(auditLayout(L), []);
+});
+
+test("the hash finalizer de-clusters similar strings", () => {
+  // FNV-1a alone maps "Top0".."Top3" to almost the same value; the fmix32 finalizer fixes it
+  const files = ["Top0/n.md", "Top1/n.md", "Top2/n.md", "Top3/n.md"];
+  const L = layout(buildTree(files, { maxDepth: 1 }), [], {});
+  const rounded = L.rings.map((r) => r.polar.toFixed(2));
+  assert.equal(new Set(rounded).size, 4, "four folders must produce four distinct tilts");
+});
+
+test("spinning a ring preserves its radius and moves its points", () => {
+  const L = layout(buildTree(["A/a.md", "A/b.md"], {}), [], {});
+  const ring = L.rings[0];
+  const before = ringPoints(ring, 16);
+  const r0 = Math.hypot(before[0], before[1], before[2]);
+  ring.spin = 0.8;
+  const after = ringPoints(ring, 16);
+  const r1 = Math.hypot(after[0], after[1], after[2]);
+  assert.ok(Math.abs(r0 - r1) < 1e-6, "radius must survive the spin");
+  let moved = 0;
+  for (let i = 0; i < before.length; i += 3) {
+    if (Math.hypot(before[i] - after[i], before[i + 1] - after[i + 1], before[i + 2] - after[i + 2]) > 1e-4) moved++;
+  }
+  assert.equal(moved, 16, "every point must actually move");
+});
+
+test("nodes stay on their ring while it spins", () => {
+  const L = layout(buildTree(["A/a.md", "A/b.md", "A/c.md"], {}), [], {});
+  const ring = L.rings[0];
+  const local = L.localByRing.get(ring.folder);
+  assert.ok(local && local.length === 3);
+  // a node's local radius must match its slot's distance from the hub before any spin
+  for (const [slot, r] of local) {
+    const d = Math.hypot(L.pos[slot * 3], L.pos[slot * 3 + 1], L.pos[slot * 3 + 2]);
+    assert.ok(Math.abs(d - Math.hypot(r, local.find((l) => l[0] === slot)[3] || 0)) < 6, "node placed near its ring");
+  }
+});
+
+test("audit catches a coplanar layout (guard against the old bug returning)", () => {
+  const L = layout(buildTree(["A/a.md", "B/b.md", "C/c.md", "D/d.md"], {}), [], {});
+  for (const r of L.rings) r.polar = 0.35; // force them all flat
+  const problems = auditLayout(L);
+  assert.ok(problems.some((p) => /coplanar/.test(p)), `expected a coplanar complaint, got ${JSON.stringify(problems)}`);
+});

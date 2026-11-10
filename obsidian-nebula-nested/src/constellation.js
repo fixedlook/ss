@@ -8,7 +8,7 @@ import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
-import { ringPoints } from "./layout.js";
+import { ringPoints, tiltPoint } from "./layout.js";
 
 export const DEFAULTS = {
   // look
@@ -17,6 +17,7 @@ export const DEFAULTS = {
   quality: "high", saveGpu: true,
   // structure (these change the layout, so the view rebuilds when they change)
   maxDepth: 3, maxRings: 120, showRootNotes: false, wedgeArcs: true, depthFade: true, spacing: 1,
+  ringSpin: 0.55, coreStyle: "orb",
 };
 
 const SWATCHES = [["Green", "#2cf27f"], ["White", "#ffffff"], ["Ice", "#9fdcff"], ["Violet", "#b38cff"], ["Amber", "#ffc46b"], ["Rose", "#ff8fa3"]];
@@ -91,11 +92,13 @@ export class Constellation {
 
     // ---- rings: full circles on the innermost shell, arcs for nested folders ----
     const wedge = !!this.s.wedgeArcs;
-    this.ringLines = []; this.ringPts = []; this.ringBase = [];
+    this.ringLines = []; this.ringPts = []; this.ringBase = []; this.ringLocal = []; this.ringArc = [];
+    this.nodeLocal = L.rings.map((r) => L.localByRing.get(r.folder) || null);
     const maxR = L.far / 1.25;
     for (const ring of L.rings) {
       const closed = ring.level === 1 || !wedge;
       const seg = closed ? 240 : Math.max(24, Math.min(240, Math.round((ring.arc[1] - ring.arc[0]) / (Math.PI * 2) * 320)));
+      if (closed) this.ringArc.push(null); else this.ringArc.push([ring.arc[0], ring.arc[1], seg]);
       const pts = closed ? ringPoints(ring, seg) : ringPoints(ring, seg, ring.arc);
       const g = new THREE.BufferGeometry(); g.setAttribute("position", new THREE.BufferAttribute(pts, 3));
       const depth = L.depths.levels > 1 ? (ring.level - 1) / Math.max(1, L.depths.levels - 1) : 0;
@@ -103,7 +106,10 @@ export class Constellation {
       const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.2 * fade, blending: THREE.AdditiveBlending, depthWrite: false });
       const line = closed ? new THREE.LineLoop(g, mat) : new THREE.Line(g, mat);
       scene.add(line);
-      this.ringLines.push(line); this.ringPts.push(pts); this.ringBase.push(0.2 * fade);
+      this.ringLines.push(line);
+      this.ringPts.push(pts);
+      this.ringLocal.push(ring); // rebuild the world-space points when the ring spins
+      this.ringBase.push(0.2 * fade);
     }
 
     // ---- links -------------------------------------------------------------
@@ -145,7 +151,7 @@ export class Constellation {
     this.beadPts = new THREE.Points(bg, this.beadMat); this.beadPts.frustumCulled = false; scene.add(this.beadPts);
 
     // ---- core --------------------------------------------------------------
-    this.core = this._coreSprite(); scene.add(this.core);
+    this.core = this._coreSprite(); this.core.scale.setScalar(this.coreSize); scene.add(this.core);
     this.coreSize = Math.max(14, L.coreRadius * 1.6);
 
     // ---- comets: one per ring, capped so huge vaults stay calm ------------
@@ -159,7 +165,8 @@ export class Constellation {
       const line = new THREE.Line(g, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
       line.frustumCulled = false; scene.add(line);
       const R = this._rng(100 + i);
-      this.comets.push({ line, lp: pts, ph: R(), sp: (0.02 + R() * 0.04) * (R() < 0.5 ? -1 : 1), TL, level: L.rings[i].level });
+      this.comets.push({ line, lp: pts, ph: R(), sp: (0.02 + R() * 0.04) * (R() < 0.5 ? -1 : 1), TL, level: L.rings[i].level, ringIdx: i });
+      (this.cometRing = this.cometRing || new Map()).set(this.comets[this.comets.length - 1], i);
     }
 
     // ---- halos round the core --------------------------------------------
@@ -229,20 +236,36 @@ export class Constellation {
     this.linkGeo.attributes.color.needsUpdate = true;
   }
 
-  // plain glowing rounded square, no logo
-  _coreSprite() {
+  // a glowing orb: radial falloff, a soft rim, no polygon edges to betray the sprite
+  _coreSprite(style) {
     const c = document.createElement("canvas"); c.width = c.height = 256; const g = c.getContext("2d");
     const rgb = this.color, rgba = (a) => `rgba(${Math.round(rgb.r * 255)},${Math.round(rgb.g * 255)},${Math.round(rgb.b * 255)},${a})`;
-    const rr = (x, y, w, h, r) => { g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath(); };
-    const glow = g.createRadialGradient(128, 128, 40, 128, 128, 128); glow.addColorStop(0, rgba(0.5)); glow.addColorStop(1, rgba(0)); g.fillStyle = glow; g.fillRect(0, 0, 256, 256);
-    rr(56, 56, 144, 144, 38);
-    const fill = g.createLinearGradient(0, 56, 0, 200); fill.addColorStop(0, rgba(0.98)); fill.addColorStop(1, rgba(0.72)); g.fillStyle = fill; g.fill();
-    g.lineWidth = 3; g.strokeStyle = "rgba(255,255,255,.55)"; g.stroke();
-    const shine = g.createLinearGradient(0, 60, 0, 130); shine.addColorStop(0, "rgba(255,255,255,.35)"); shine.addColorStop(1, "rgba(255,255,255,0)");
-    rr(64, 62, 128, 64, 30); g.fillStyle = shine; g.fill();
+    const kind = style || this.s.coreStyle || "orb";
+    g.clearRect(0, 0, 256, 256);
+
+    if (kind === "dot") {
+      // small hard star
+      const r0 = g.createRadialGradient(128, 128, 0, 128, 128, 70);
+      r0.addColorStop(0, rgba(1)); r0.addColorStop(0.35, rgba(0.85)); r0.addColorStop(1, rgba(0));
+      g.fillStyle = r0; g.beginPath(); g.arc(128, 128, 70, 0, Math.PI * 2); g.fill();
+    } else if (kind === "none") {
+      // nothing
+    } else {
+      // orb: bright centre, smooth falloff, faint concentric rim
+      const r0 = g.createRadialGradient(128, 128, 0, 128, 128, 118);
+      r0.addColorStop(0, "rgba(255,255,255,1)");
+      r0.addColorStop(0.18, rgba(0.95));
+      r0.addColorStop(0.55, rgba(0.42));
+      r0.addColorStop(0.82, rgba(0.1));
+      r0.addColorStop(1, rgba(0));
+      g.fillStyle = r0; g.beginPath(); g.arc(128, 128, 118, 0, Math.PI * 2); g.fill();
+      // a thin rim makes it read as a sphere rather than a blob
+      g.strokeStyle = "rgba(255,255,255,.22)"; g.lineWidth = 2;
+      g.beginPath(); g.arc(128, 128, 74, 0, Math.PI * 2); g.stroke();
+    }
     const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
-    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, opacity: 0.95, depthTest: false }));
-    s.renderOrder = 10; return s;
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, opacity: 0.95, depthTest: false }));
+    sp.renderOrder = 10; return sp;
   }
 
   // ---------------------------------------------------------------- UI
@@ -270,6 +293,7 @@ export class Constellation {
     const b2 = mk("nebula-btn", bar, "button"); b2.textContent = "Focus"; b2.addEventListener("click", () => this.opts.onFocus && this.opts.onFocus());
     const b3 = mk("nebula-btn", bar, "button"); b3.textContent = "Customize"; b3.addEventListener("click", () => this.panel.classList.toggle("is-open"));
     this._panel(mk);
+    if (this.opts.panelOpen) this.panel.classList.add("is-open");
   }
 
   _panel(mk) {
@@ -277,13 +301,39 @@ export class Constellation {
     mk("nebula-ph", p).textContent = "Customize";
     const row = (label) => { const r = mk("nebula-row", p); mk("nebula-rl", r).textContent = label; return r; };
 
+    // colour: swatches, a visible "custom" chip, and a hex box so any colour can be typed
     const cr = row("Color"), sw = mk("nebula-sw", cr);
     SWATCHES.forEach(([name, hex]) => {
       const b = mk("nebula-dot", sw, "button"); b.title = name; b.style.background = hex;
-      b.addEventListener("click", () => this.set({ color: hex }));
+      b.addEventListener("click", () => { this.set({ color: hex }); if (this.hexInput) this.hexInput.value = hex; });
     });
-    const pick = mk("nebula-pick", sw, "input"); pick.type = "color"; pick.value = this.s.color;
-    pick.addEventListener("input", () => this.set({ color: pick.value })); this.picker = pick;
+    const custom = mk("nebula-custom", cr, "button");
+    custom.title = "Pick any colour";
+    custom.append(mk("nebula-custom-chip", custom, "span"), mk("nebula-custom-label", custom, "span"));
+    custom.querySelector(".nebula-custom-label").textContent = "Custom";
+    const pick = mk("nebula-pick", custom, "input"); pick.type = "color"; pick.value = this.s.color;
+    const hex = mk("nebula-hex", p, "input");
+    hex.type = "text"; hex.spellcheck = false; hex.placeholder = "#2cf27f";
+    const hexRow = mk("nebula-row", p);
+    mk("nebula-rl", hexRow).textContent = "Hex";
+    hexRow.appendChild(hex);
+    const chip = () => {
+      if (!custom.firstChild) return;
+      custom.firstChild.style.background = this.s.color;
+      custom.style.borderColor = this.s.color + "66";
+    };
+    const applyHex = () => {
+      const v = hex.value.trim().replace(/^#?/, "#");
+      if (/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(v)) {
+        const full = v.length === 4 ? "#" + v.slice(1).split("").map((ch) => ch + ch).join("") : v;
+        this.set({ color: full }); pick.value = full; hex.value = full; chip();
+      } else hex.value = this.s.color;
+    };
+    pick.addEventListener("input", () => { this.set({ color: pick.value }); hex.value = pick.value; chip(); });
+    hex.addEventListener("change", applyHex);
+    hex.addEventListener("keydown", (e) => { if (e.key === "Enter") applyHex(); });
+    this.picker = pick; this.hexInput = hex; this._chip = chip;
+    hex.value = this.s.color; chip();
 
     const slider = (label, key, min, max, step, after) => {
       const r = row(label), inp = mk("nebula-range", r, "input"), out = mk("nebula-val", r, "span");
@@ -316,9 +366,20 @@ export class Constellation {
     slider("Rings", "rings", 0, 3, 0.05);
     slider("Light beads", "beads", 0, MAX_BEADS, 10);
     slider("Bead speed", "beadSpeed", 0.1, 4, 0.1);
-    slider("Spin", "spin", 0, 2, 0.05);
+    slider("Spin (scene)", "spin", 0, 2, 0.05);
+    slider("Orbit spin", "ringSpin", 0, 3, 0.05);
     toggle("Comets", "comets"); toggle("Pulse", "pulse"); toggle("Stars", "stars");
     toggle("Folder names", "labels"); toggle("Save GPU in background", "saveGpu");
+
+    const corer = row("Core"), coreSeg = mk("nebula-seg", corer);
+    [["orb", "Orb"], ["dot", "Star"], ["none", "None"]].forEach(([v, label]) => {
+      const b = mk("nebula-segb", coreSeg, "button"); b.textContent = label;
+      b.addEventListener("click", () => {
+        this.set({ coreStyle: v });
+        coreSeg.querySelectorAll("button").forEach((x) => x.classList.toggle("is-on", x === b));
+      });
+      if (this.s.coreStyle === v) b.classList.add("is-on");
+    });
 
     const qr = row("Quality"), seg = mk("nebula-seg", qr);
     this._qBtns = Object.keys(QUALITY).map((q) => {
@@ -333,11 +394,23 @@ export class Constellation {
     });
   }
 
+  // Structure keys change the geometry, and the geometry is rebuilt by constructing a new
+  // Constellation. If the save is still debounced when that happens, the new instance loads stale
+  // settings and the change appears to "not save" (and the panel snaps shut). So persist those
+  // synchronously; only cosmetic tweaks are debounced.
+  static STRUCTURE = ["maxDepth", "maxRings", "showRootNotes", "wedgeArcs", "depthFade", "spacing", "coreStyle"];
+
   set(patch) {
     Object.assign(this.s, patch); this.apply(patch);
+    const structural = Object.keys(patch).some((k) => Constellation.STRUCTURE.includes(k));
     window.clearTimeout(this._saveT);
-    this._saveT = window.setTimeout(() => this.opts.onSettings && this.opts.onSettings(Object.assign({}, this.s)), 300);
+    const save = () => this.opts.onSettings && this.opts.onSettings(Object.assign({}, this.s));
+    if (structural) save();
+    else this._saveT = window.setTimeout(save, 300);
   }
+
+  /** panel visibility, so a rebuild can put the user back where they were */
+  panelOpen() { return this.panel && this.panel.classList.contains("is-open"); }
 
   apply(patch) {
     const s = this.s;
@@ -346,9 +419,16 @@ export class Constellation {
       this.ringLines.forEach((r) => r.material.color.copy(this.color));
       this.halos.forEach((l) => l.material.color.copy(this.color));
       this._linkColors();
-      const old = this.core; this.core = this._coreSprite(); this.scene.add(this.core);
+      const old = this.core; this.core = this._coreSprite(); this.core.scale.setScalar(this.coreSize); this.scene.add(this.core);
       if (old) { this.scene.remove(old); old.material.map.dispose(); old.material.dispose(); }
-      this.root.style.setProperty("--nebula-color", s.color); if (this.picker) this.picker.value = s.color;
+      this.root.style.setProperty("--nebula-color", s.color);
+      if (this.picker) this.picker.value = s.color;
+      if (this.hexInput) this.hexInput.value = s.color;
+      if (this._chip) this._chip();
+    }
+    if (patch && "coreStyle" in patch) {
+      const old = this.core; this.core = this._coreSprite(); this.core.scale.setScalar(this.coreSize); this.scene.add(this.core);
+      if (old) { this.scene.remove(old); old.material.map.dispose(); old.material.dispose(); }
     }
     this.bloom.strength = s.glow; this.bloom.radius = s.glowSize;
     this.uniforms.uSizeMul.value = s.nodeSize;
@@ -500,6 +580,37 @@ export class Constellation {
         el.style.opacity = Math.min(1, byLevel * Math.min(1, (this.far * 1.2 - cd) / (this.far * 0.35))) * zf;
         el.classList.remove("is-off");
         el.style.transform = `translate(${(tmp.x * 0.5 + 0.5) * w}px,${(-tmp.y * 0.5 + 0.5) * h}px) translate(-50%,-135%) scale(${ring.level === 1 ? 1 : 0.86})`;
+      }
+    }
+
+    // rings drift: each ring spins around its own axis at its own speed and direction.
+    // Nodes are children of their ring, so they have to be re-placed with it.
+    if (!this.reduced && this.s.ringSpin > 0) {
+      for (let i = 0; i < this.ringLocal.length; i++) {
+        const ring = this.ringLocal[i];
+        const speed = (ring.orbitSpeed || 0) * this.s.ringSpin;
+        if (!speed) continue;
+        ring.spin = (ring.spin || 0) + speed * dt / 1000;
+        const arc = this.ringArc[i];
+        const pts = arc ? ringPoints(ring, arc[2], [arc[0], arc[1]]) : ringPoints(ring, this.ringPts[i].length / 3);
+        const attr = this.ringLines[i].geometry.attributes.position;
+        attr.array.set(pts); attr.needsUpdate = true;
+        this.ringPts[i] = pts;
+        // re-place this ring's stars (they are stored with their local ring coordinates)
+        const local = this.nodeLocal[i];
+        if (local) {
+          const P = this.L.pos, out = [0, 0, 0];
+          for (const [slot, r, th, y] of local) {
+            tiltPoint(Math.cos(th) * r, y, Math.sin(th) * r, ring, out);
+            P[slot * 3] = out[0]; P[slot * 3 + 1] = out[1]; P[slot * 3 + 2] = out[2];
+          }
+          this.points.geometry.attributes.position.needsUpdate = true;
+        }
+      }
+      // comets ride the rings, so re-point them at the fresh geometry
+      for (const cm of this.comets) {
+        const idx = this.cometRing.get(cm);
+        if (idx != null) cm.lp = this.ringPts[idx];
       }
     }
 
