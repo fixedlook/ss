@@ -86,7 +86,7 @@ namespace Atas.Indicators.HistoryExport
 
 		protected override void OnCalculate(int bar, decimal value)
 		{
-			PumpPending();
+			// Nothing to compute: this indicator only reads history when asked to export.
 		}
 
 		protected override void OnFinishRecalculate()
@@ -112,12 +112,6 @@ namespace Atas.Indicators.HistoryExport
 				Priority = ThreadPriority.BelowNormal
 			};
 			thread.Start();
-		}
-
-		private void PumpPending()
-		{
-			// Kept as a hook: with the background-thread approach there is nothing to pump here, and this
-			// stays empty on purpose rather than silently dropping work.
 		}
 
 		private void ExportLoop()

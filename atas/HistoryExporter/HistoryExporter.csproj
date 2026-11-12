@@ -3,14 +3,15 @@
   <!-- History Exporter - ATAS / ATAS X chart indicator.
        Dumps the bars and footprint already loaded on the chart to CSV. No live capture.
 
-       Build:
+       Normal build (path is detected automatically):
            dotnet build -c Release
+
+       If detection fails, point it at your install:
+           dotnet build -c Release -p:AtasBase="C:\Program Files\ATAS X"
            dotnet build -c Release -p:AtasBase="C:\Program Files (x86)\ATAS Platform"
            dotnet build -c Release -p:AtasBase="/Applications/ATAS X.app/Contents/MonoBundle"
 
-       Output: bin/Release/net10.0-windows/HistoryExporter.dll
-       Copy it into %APPDATA%\ATAS X\Extensions (or %APPDATA%\ATAS\Indicators), or use
-       "Add custom indicator" in the indicators window.
+       Output: bin\Release\net10.0-windows\HistoryExporter.dll
   -->
 
   <PropertyGroup>
@@ -20,9 +21,14 @@
     <LangVersion>latest</LangVersion>
     <AssemblyName>HistoryExporter</AssemblyName>
     <RootNamespace>Atas.Indicators.HistoryExport</RootNamespace>
+  </PropertyGroup>
 
-    <!-- Override with -p:AtasBase=... -->
-    <AtasBase Condition="'$(AtasBase)' == ''">C:\Program Files\ATAS X</AtasBase>
+  <!-- Find the platform: explicit -p:AtasBase wins, otherwise probe the usual install locations. -->
+  <PropertyGroup>
+    <AtasBase Condition="'$(AtasBase)' == '' And Exists('C:\Program Files\ATAS X\ATAS.Indicators.dll')">C:\Program Files\ATAS X</AtasBase>
+    <AtasBase Condition="'$(AtasBase)' == '' And Exists('C:\Program Files (x86)\ATAS Platform\ATAS.Indicators.dll')">C:\Program Files (x86)\ATAS Platform</AtasBase>
+    <AtasBase Condition="'$(AtasBase)' == '' And Exists('$(MSBuildProgramFiles32)\ATAS Platform\ATAS.Indicators.dll')">$(MSBuildProgramFiles32)\ATAS Platform</AtasBase>
+    <AtasBase Condition="'$(AtasBase)' == '' And Exists('/Applications/ATAS X.app/Contents/MonoBundle/ATAS.Indicators.dll')">/Applications/ATAS X.app/Contents/MonoBundle</AtasBase>
   </PropertyGroup>
 
   <ItemGroup>
@@ -35,5 +41,25 @@
       <Private>false</Private>
     </Reference>
   </ItemGroup>
+
+  <!-- Fail with one readable sentence instead of a wall of "type not found" errors. -->
+  <Target Name="CheckAtasBase" BeforeTargets="PrepareForBuild">
+    <Error Condition="'$(AtasBase)' == '' Or !Exists('$(AtasBase)\ATAS.Indicators.dll')"
+           Text="ATAS.Indicators.dll was not found. Point the build at your platform:
+     dotnet build -c Release -p:AtasBase=&quot;C:\Program Files\ATAS X&quot;"
+           ContinueOnError="false" />
+  </Target>
+
+  <!-- Optional: -p:Install=true also copies the DLL into the platform's Extensions folder. -->
+  <Target Name="InstallToAtas" AfterTargets="Build" Condition="'$(Install)' == 'true'">
+    <PropertyGroup>
+      <AtasExtensions Condition="Exists('$(APPDATA)\ATAS X\Extensions')">$(APPDATA)\ATAS X\Extensions</AtasExtensions>
+      <AtasExtensions Condition="'$(AtasExtensions)' == '' And Exists('$(APPDATA)\ATAS\Indicators')">$(APPDATA)\ATAS\Indicators</AtasExtensions>
+    </PropertyGroup>
+    <Error Condition="'$(AtasExtensions)' == ''"
+           Text="Could not find an ATAS Extensions folder under %APPDATA%. Copy the DLL manually." />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(AtasExtensions)" />
+    <Message Importance="high" Text="Installed: $(AtasExtensions)\$(TargetFileName)" />
+  </Target>
 
 </Project>
