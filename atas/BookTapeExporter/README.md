@@ -92,11 +92,18 @@ feed and the fallback is trade + depth + bar structure.
 
 ## Reading the output
 
-`analysis/tape_context.py` takes a signal list and reports the surrounding tape context. Point it at the
-exported `trades`/`structure` CSV instead of the old 1‑minute extract:
-
-```bash
-python3 analysis/tape_context.py --file signals.csv --trades trades_20261110.csv
-```
+Point the analysis tooling at the exported `trades` / `structure` CSVs instead of the old 1‑minute
+extract — they share the same `ts_utc` first column, so the join is trivial. `tape_context.py` currently
+reads the historical extract only; wiring the exported trade tape into it is the next step, not something
+this DLL does.
 
 Columns are additive only — new fields are appended, never inserted, so an existing parser keeps working.
+
+## Known limitation of a long backfill
+
+A chunk can come back **empty** even though the request was accepted: the broker's data server may not
+retain ticks that far back, independently of the platform's 7‑day rule. The chain still advances (the
+cursor never moves backwards, so it always terminates), which means a 90‑day request can silently yield
+only the last few weeks of actual trades. `_status.csv` reports rows per chunk in the log line and the
+running total, so **compare `backfill_rows` against the day count before trusting the window**. Start
+with 30 days, confirm the oldest file has rows, then extend.

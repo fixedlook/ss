@@ -6,11 +6,11 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
-using ATAS.DataFeedsCore;
 using ATAS.Indicators;
 using Utils.Common.Logging;
 using MarketByOrder = ATAS.DataFeedsCore.MarketByOrder;
 using MboUpdateType = ATAS.DataFeedsCore.MarketByOrderUpdateTypes;
+using MboSide = ATAS.DataFeedsCore.MarketDataType;
 
 namespace Atas.Indicators.BookTape
 {
@@ -68,6 +68,8 @@ namespace Atas.Indicators.BookTape
 
 		private string _activeFolder = string.Empty;
 		private string _symbol = "?";
+		private TimeZoneInfo? _platformZone;
+		private string _platformZoneId = string.Empty;
 
 		// Resting orders last seen, used to name the order a print consumed.
 		private readonly Dictionary<long, RestingOrder> _resting = new();
@@ -133,6 +135,10 @@ namespace Atas.Indicators.BookTape
 		[Description("Windows or IANA zone id for ts_local and for splitting files by session (Central Standard Time / America/Chicago).")]
 		public string SessionTimeZoneId { get; set; } = "Central Standard Time";
 
+		[Display(Name = "Platform time zone", GroupName = "Output", Order = 25)]
+		[Description("Zone the platform displays times in, used to convert them to UTC. Empty = this computer's local zone, which is correct for a normal install. Windows or IANA id.")]
+		public string PlatformTimeZoneId { get; set; } = string.Empty;
+
 		[Display(Name = "Session roll hour", GroupName = "Output", Order = 30)]
 		[Description("Local hour at which a new trading day starts, so a Globex session is not split at midnight. 17 for the 17:00 open.")]
 		public int SessionRollHour { get; set; } = 17;
@@ -184,6 +190,7 @@ namespace Atas.Indicators.BookTape
 
 			var folder = ResolveFolder();
 			_symbol = InstrumentInfo?.Instrument ?? "?";
+			_platformZone = ResolvePlatformZone();
 
 			if (!string.Equals(folder, _activeFolder, StringComparison.Ordinal))
 			{
@@ -218,6 +225,26 @@ namespace Atas.Indicators.BookTape
 		private CsvSink MakeSink(string name, string header, string folder)
 		{
 			return new CsvSink(folder, name, header, SessionTimeZoneId, SessionRollHour, MaxRowsPerFile);
+		}
+
+		private TimeZoneInfo? ResolvePlatformZone()
+		{
+			_platformZoneId = string.IsNullOrWhiteSpace(PlatformTimeZoneId) ? string.Empty : PlatformTimeZoneId.Trim();
+
+			if (_platformZoneId.Length == 0)
+				return TimeZoneInfo.Local;
+
+			try
+			{
+				return TimeZoneInfo.FindSystemTimeZoneById(_platformZoneId);
+			}
+			catch (Exception)
+			{
+				this.LogWarn("Book & Tape Exporter: platform time zone '{0}' is not known on this machine; " +
+					"falling back to the local zone. Times may be offset.", _platformZoneId);
+
+				return TimeZoneInfo.Local;
+			}
 		}
 
 		private string ResolveFolder()
@@ -463,7 +490,7 @@ namespace Atas.Indicators.BookTape
 					.Append(double.IsNaN(latencyMs) ? string.Empty : latencyMs.ToString("0.#", CultureInfo.InvariantCulture)).Append(',')
 					.Append(_symbol).Append(',')
 					.Append(UpdateTypeCode(order.Type)).Append(',')
-					.Append(order.Side == MarketDataType.Bid ? "B" : "A").Append(',')
+					.Append(order.Side == MboSide.Bid ? "B" : "A").Append(',')
 					.Append(CsvSink.Fmt(order.Price)).Append(',')
 					.Append(CsvSink.Fmt(order.Volume)).Append(',')
 					.Append(order.Priority.ToString(CultureInfo.InvariantCulture)).Append(',')
@@ -493,7 +520,7 @@ namespace Atas.Indicators.BookTape
 
 					_resting[order.ExchangeOrderId] = new RestingOrder(
 						order.Price,
-						order.Side == MarketDataType.Bid);
+						order.Side == MboSide.Bid);
 					break;
 			}
 		}
@@ -960,21 +987,34 @@ namespace Atas.Indicators.BookTape
 		#region Time helpers
 
 		/// <summary>
-		/// Converts a platform timestamp to UTC. The platform delivers wall-clock time in the instrument's
-		/// zone with Kind=Unspecified, so the offset comes from InstrumentInfo instead of being assumed -
-		/// guessing would shift every row by the broker offset and desynchronise it from the chart.
+		/// Converts a platform timestamp to UTC.
 		/// </summary>
+		/// <remarks>
+		/// The platform hands over wall-clock time with Kind=Unspecified, in whatever zone the user has the
+		/// platform set to. Two things are deliberately not done here:
+		///
+		/// - It does not assume the clock is UTC. That would shift every row by the broker offset and put
+		///   the whole dataset hours away from the chart times the signals are quoted in.
+		/// - It does not use a fixed offset. A fixed -6 would be wrong for the whole of daylight time, so the
+		///   offset is resolved per timestamp through the time zone database, which applies DST correctly.
+		/// </remarks>
 		private DateTime ToUtc(DateTime time)
 		{
 			if (time.Kind == DateTimeKind.Utc)
 				return time;
 
-			var offset = InstrumentInfo?.TimeZoneOffset ?? TimeSpan.Zero;
+			var zone = _platformZone ?? TimeZoneInfo.Local;
+			var unspecified = DateTime.SpecifyKind(time, DateTimeKind.Unspecified);
 
-			if (offset == TimeSpan.Zero)
-				return DateTime.SpecifyKind(time, DateTimeKind.Utc);
-
-			return DateTime.SpecifyKind(time - offset, DateTimeKind.Utc);
+			try
+			{
+				return DateTime.SpecifyKind(unspecified - zone.GetUtcOffset(unspecified), DateTimeKind.Utc);
+			}
+			catch (Exception)
+			{
+				// A zone database failure must not stop the capture; fall back to UTC rather than dropping rows.
+				return DateTime.SpecifyKind(unspecified, DateTimeKind.Utc);
+			}
 		}
 
 		private static DateTime MaxUtc(DateTime a, DateTime b)
