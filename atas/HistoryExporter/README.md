@@ -88,3 +88,10 @@ ATAS needs the reload button in the status bar. No restart.
 Give me the `footprint.csv` (and the price/time list) and I can check every signal against the real
 per-price bid/ask at that minute — volume, absorption, where the prints landed relative to the session
 profile, and whether the claimed direction survived the next 15 minutes.
+
+## A note on large single-bar moves
+
+Big one-minute steps in the exported data are almost always real. On NQ the largest bars cluster at
+08:30, 09:30, 10:00, 13:30 and 14:00 New York time — the equity open and the standard US data-release
+slots. A −175 point bar at 12:30 UTC is 08:30 ET, not a corrupt row. Check the volume on the bar before
+suspecting the data: release bars carry roughly ten times the usual volume.
