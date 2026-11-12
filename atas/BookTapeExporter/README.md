@@ -70,6 +70,9 @@ platform executable tells you which.
 
 ## Settings that matter
 
+- **Platform time zone** — leave empty to use this computer's zone, which is right for a normal install.
+  Set it (Windows or IANA id) if the platform displays times in a zone other than the machine's. The
+  conversion to UTC resolves the offset **per timestamp**, so daylight time is handled correctly.
 - **Session time zone** — `Central Standard Time` (Windows) or `America/Chicago` (IANA). Both work; the
   id is resolved at runtime.
 - **Session roll hour** — `17`, so a Globex session is one file instead of being cut at midnight. The
