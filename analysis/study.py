@@ -93,25 +93,109 @@ def load_bars():
     return bars, coverage
 
 
-def load_footprint(day_start_utc):
-    """price-level rows for one UTC day; empty when the date is outside the sample."""
-    out = []
+def load_footprint(path):
+    """Load per-price bid/ask, in either format. Returns {session_day: [(dt, price, bid, ask, ticks)]}.
+
+    Accepts:
+      ATAS History Exporter  ts_utc,ts_local,sym,price,bid_vol,ask_vol,delta,ticks
+      MotiveWave extract     timestamp,price,bid_volume,ask_volume,delta,trades
+    """
+    by_day = {}
+    malformed = 0
+
     try:
-        with open("mnq_bidask.footprint.csv") as f:
-            for r in csv.reader(f):
-                if not r or r[0] == "timestamp":
-                    continue
+        with open(path, newline="") as f:
+            reader = csv.DictReader(f)
+            fields = reader.fieldnames or []
+
+            for row in reader:
                 try:
-                    ts = int(r[0])
-                except ValueError:
+                    if "ts_utc" in fields:
+                        dt = datetime.fromisoformat(row["ts_utc"]).replace(tzinfo=timezone.utc)
+                        price = float(row["price"])
+                        bid = float(row["bid_vol"] or 0)
+                        ask = float(row["ask_vol"] or 0)
+                        ticks = float(row["ticks"] or 0)
+                    else:
+                        dt = _ts_to_dt(row["timestamp"])
+                        price = float(row["price"])
+                        bid = float(row["bid_volume"] or 0)
+                        ask = float(row["ask_volume"] or 0)
+                        ticks = float(row["trades"] or 0)
+                except (KeyError, ValueError, TypeError):
+                    malformed += 1
                     continue
-                dt = _ts_to_dt(ts)
-                if dt.date() != day_start_utc.date():
-                    continue
-                out.append((float(r[1]), float(r[2]), float(r[3])))
+
+                key = session_of(dt, None)
+                by_day.setdefault(key, []).append((dt, price, bid, ask, ticks))
     except FileNotFoundError:
-        return []
-    return out
+        return None, 0
+
+    for key in by_day:
+        by_day[key].sort()
+
+    return by_day, malformed
+
+
+def level_context(rows_for_session, dt_utc, price, tick=0.25, band_ticks=8, window_min=3):
+    """What the book did at and around this price, in a short window after the signal.
+
+    This is the part a 1-minute OHLC bar cannot give: how much traded *at this price*, whether the
+    buyers or the sellers were the aggressors there, and whether the price was a volume shelf that
+    the market had to chew through.
+    """
+    if not rows_for_session:
+        return {}
+
+    end = dt_utc + timedelta(minutes=window_min)
+    window = [r for r in rows_for_session if dt_utc <= r[0] <= end]
+    if not window:
+        return {}
+
+    lo = price - band_ticks * tick
+    hi = price + band_ticks * tick
+
+    band_bid = band_ask = band_ticks_total = 0.0
+    at_bid = at_ask = 0.0
+    session_vol = {}
+    band_vol = 0.0
+
+    for dt, p, bid, ask, ticks in window:
+        session_vol[p] = session_vol.get(p, 0.0) + bid + ask
+        if lo <= p <= hi:
+            band_bid += bid
+            band_ask += ask
+            band_ticks_total += ticks
+            band_vol += bid + ask
+
+    for dt, p, bid, ask, ticks in window:
+        if abs(p - price) < tick / 2:
+            at_bid += bid
+            at_ask += ask
+
+    total = sum(session_vol.values())
+    ranked = sorted(session_vol.items(), key=lambda kv: -kv[1])
+    rank = next((i for i, (p, _) in enumerate(ranked) if abs(p - price) < tick / 2), None)
+
+    imbalance = (band_ask - band_bid) / (band_ask + band_bid) if (band_ask + band_bid) else 0.0
+    at_imbalance = (at_ask - at_bid) / (at_ask + at_bid) if (at_ask + at_bid) else 0.0
+
+    return {
+        "band_vol": band_vol,
+        "band_bid": band_bid,
+        "band_ask": band_ask,
+        "band_delta": band_ask - band_bid,
+        "band_imbalance": round(imbalance, 3),
+        "at_price_bid": at_bid,
+        "at_price_ask": at_ask,
+        "at_price_imbalance": round(at_imbalance, 3),
+        "band_share_of_session": round(band_vol / total, 3) if total else None,
+        "level_rank": None if rank is None else rank,
+        "levels_traded": len(ranked),
+        "top_level_price": ranked[0][0] if ranked else None,
+        "top_level_vol": ranked[0][1] if ranked else None,
+        "window_bars": len(window),
+    }
 
 
 # ----------------------------------------------------------------------------- features
@@ -314,6 +398,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--signals", help="csv of time,price[,label]")
     ap.add_argument("--tz", default="Europe/Rome", help="zone the signal times are written in")
+    ap.add_argument("--footprint", help="footprint.csv from the ATAS History Exporter (or the older extract)")
     ap.add_argument("--selftest", action="store_true",
                     help="run the whole pipeline on swing points found in the data")
     args = ap.parse_args()
@@ -331,6 +416,17 @@ def main():
     print(f"  coverage: {days[0]} -> {days[-1]}  ({len(days)} dates)")
 
     sessions, medians = build_sessions(bars)
+
+    foot = None
+    if args.footprint:
+        foot, foot_bad = load_footprint(args.footprint)
+        if foot is None:
+            sys.exit(f"footprint file not found: {args.footprint}")
+        fdays = sorted(foot)
+        levels = sum(len(v) for v in foot.values())
+        print(f"  {args.footprint:24} {levels:>9,} price rows over {len(fdays)} sessions"
+              + (f", {foot_bad} malformed skipped" if foot_bad else ""))
+        print(f"  footprint sessions: {fdays[0]} -> {fdays[-1]}")
     zone = ZoneInfo(args.tz)
     signals = []
 
@@ -393,6 +489,9 @@ def main():
         med = medians.get(sess, 0.0)
 
         res = describe(pairs, idx, price, dt, label, med)
+
+        if foot is not None:
+            res["levels"] = level_context(foot.get(sess), dt, price)
         low = label.lower()
         res["direction"] = "bullish" if ("bull" in low or low in ("u", "up", "▲")) else \
                            "bearish" if ("bear" in low or low in ("d", "down", "▼")) else ""
@@ -445,6 +544,16 @@ def main():
             print(f"  swing: 5-bar {r['swing_5'] or '-'}  15-bar {r['swing_15'] or '-'}  45-bar {r['swing_45'] or '-'}")
             print(f"  before: 5m {r['runup_5']}  15m {r['runup_15']}  30m {r['runup_30']}")
             print(f"  after:  5m {r['fwd_5']}  15m {r['fwd_15']}  30m {r['fwd_30']}  60m {r['fwd_60']}")
+            lv = r.get("levels") or {}
+            if lv:
+                print(f"  book @price: traded {lv['at_price_bid']:.0f} bid / {lv['at_price_ask']:.0f} ask"
+                      f"  imbalance {lv['at_price_imbalance']:+.2f}")
+                print(f"  book +-8 ticks (first {lv['window_bars']} bars): "
+                      f"{lv['band_bid']:.0f} bid / {lv['band_ask']:.0f} ask  "
+                      f"delta {lv['band_delta']:+.0f}  imbalance {lv['band_imbalance']:+.2f}")
+                if lv["level_rank"] is not None:
+                    print(f"  level rank: {lv['level_rank'] + 1} of {lv['levels_traded']} traded levels"
+                          f"  (busiest {lv['top_level_price']} with {lv['top_level_vol']:.0f})")
 
     print("\n" + "-" * 84)
     print("Trust the z-scores, not the story: |z| < 2 means these minutes are indistinguishable from")
