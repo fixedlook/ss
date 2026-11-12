@@ -54,22 +54,26 @@
   <!-- Optional: -p:Install=true copies the DLL into the platform's Extensions folder.
        Never fails the build: a missing app-data folder means the platform has not created one
        yet, which is not a reason to lose a good DLL. -->
+  <!-- Optional: -p:Install=true copies the DLL into every ATAS install found.
+       Both the classic ATAS and ATAS X can be present, so it installs into all of them rather
+       than guessing, and it never fails the build: no app-data folder is not a bad DLL. -->
   <Target Name="InstallToAtas" AfterTargets="Build" Condition="'$(Install)' == 'true'">
-    <PropertyGroup>
-      <AtasExtensions Condition="Exists('$(APPDATA)\ATAS X\Extensions')">$(APPDATA)\ATAS X\Extensions</AtasExtensions>
-      <AtasExtensions Condition="'$(AtasExtensions)' == '' And Exists('$(APPDATA)\ATAS\Extensions')">$(APPDATA)\ATAS\Extensions</AtasExtensions>
-      <AtasExtensions Condition="'$(AtasExtensions)' == '' And Exists('$(APPDATA)\ATAS\Indicators')">$(APPDATA)\ATAS\Indicators</AtasExtensions>
-      <!-- Folder not created yet, but the platform's app-data root exists: make the standard one. -->
-      <AtasExtensions Condition="'$(AtasExtensions)' == '' And Exists('$(APPDATA)\ATAS X')">$(APPDATA)\ATAS X\Extensions</AtasExtensions>
-      <AtasExtensions Condition="'$(AtasExtensions)' == '' And Exists('$(APPDATA)\ATAS')">$(APPDATA)\ATAS\Indicators</AtasExtensions>
-    </PropertyGroup>
+    <ItemGroup>
+      <!-- ATAS X keeps chart extensions in Extensions. -->
+      <_AtasDest Include="$(APPDATA)\ATAS X\Extensions" Condition="Exists('$(APPDATA)\ATAS X')" />
+      <!-- The classic platform ships with Indicators (the historical name for Extensions). -->
+      <_AtasDest Include="$(APPDATA)\ATAS\Indicators" Condition="Exists('$(APPDATA)\ATAS')" />
+      <_AtasDest Include="$(APPDATA)\ATAS\Extensions" Condition="Exists('$(APPDATA)\ATAS\Extensions')" />
+    </ItemGroup>
 
-    <MakeDir Directories="$(AtasExtensions)" Condition="'$(AtasExtensions)' != ''" />
-    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(AtasExtensions)" Condition="'$(AtasExtensions)' != ''" />
+    <MakeDir Directories="@(_AtasDest)" Condition="'@(_AtasDest)' != ''" />
+    <Copy SourceFiles="$(TargetPath)"
+          DestinationFiles="@(_AtasDest->'%(Identity)\$(TargetFileName)')"
+          Condition="'@(_AtasDest)' != ''" />
 
-    <Message Importance="high" Condition="'$(AtasExtensions)' != ''"
-             Text="Installed: $(AtasExtensions)\$(TargetFileName)" />
-    <Message Importance="high" Condition="'$(AtasExtensions)' == ''"
+    <Message Importance="high" Condition="'@(_AtasDest)' != ''"
+             Text="Installed to: @(_AtasDest, ' + ')" />
+    <Message Importance="high" Condition="'@(_AtasDest)' == ''"
              Text="Built: $(TargetPath)$([System.Environment]::NewLine)No ATAS app-data folder found. In ATAS use &quot;Add custom indicator&quot; and pick that file." />
   </Target>
 
