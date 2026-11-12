@@ -31,7 +31,7 @@ import zipfile
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-BAR_FILES = ["mnq_bidask.csv", "mnq_flow.csv.gz"]
+BAR_FILES = ["bars.csv", "mnq_bidask.csv", "mnq_flow.csv.gz"]
 ARCHIVE = "MNQZ26 - 1 min - RTH.zip"
 
 # RTH in New York time; everything else is overnight.
@@ -63,17 +63,31 @@ def load_bars():
             with opener(path, "rt", errors="replace") as f:
                 for row in csv.DictReader(f):
                     try:
+                        if "ts_utc" in row:
+                            ts_field = row["ts_utc"]
+                        else:
+                            ts_field = row["timestamp"]
+                        # The ATAS export and the older extracts name the same columns differently.
+                        def pick(*names, default=0.0):
+                            for name in names:
+                                if name in row and row[name] not in (None, ""):
+                                    return float(row[name])
+                            return default
+
                         bar = {
-                            "o": float(row["open"]), "h": float(row["high"]),
-                            "l": float(row["low"]), "c": float(row["close"]),
-                            "v": float(row["volume"]),
-                            "bv": float(row["bid_volume"] or 0),
-                            "av": float(row["ask_volume"] or 0),
-                            "d": float(row["delta"] or 0),
-                            "n": float(row["trades"] or 0),
+                            "o": pick("open"), "h": pick("high"),
+                            "l": pick("low"), "c": pick("close"),
+                            "v": pick("volume", "vol"),
+                            "bv": pick("bid_volume", "bid_vol"),
+                            "av": pick("ask_volume", "ask_vol"),
+                            "d": pick("delta"),
+                            "n": pick("trades", "ticks"),
                             "src": path,
                         }
-                        dt = _ts_to_dt(row["timestamp"]).replace(second=0, microsecond=0)
+                        if "ts_utc" in row:
+                            dt = datetime.fromisoformat(ts_field).replace(tzinfo=timezone.utc).replace(second=0, microsecond=0)
+                        else:
+                            dt = _ts_to_dt(ts_field).replace(second=0, microsecond=0)
                     except (KeyError, ValueError, TypeError):
                         # Both extracts contain a handful of truncated rows; skipping them is
                         # correct, failing the whole load over 8 rows out of 1.9M is not.
@@ -93,7 +107,7 @@ def load_bars():
     return bars, coverage
 
 
-def load_footprint(path):
+def load_footprint(path, wanted=None):
     """Load per-price bid/ask, in either format. Returns {session_day: [(dt, price, bid, ask, ticks)]}.
 
     Accepts:
@@ -103,8 +117,10 @@ def load_footprint(path):
     by_day = {}
     malformed = 0
 
+    opener = gzip.open if str(path).endswith(".gz") else open
+
     try:
-        with open(path, newline="") as f:
+        with opener(path, "rt", newline="") as f:
             reader = csv.DictReader(f)
             fields = reader.fieldnames or []
 
@@ -127,6 +143,8 @@ def load_footprint(path):
                     continue
 
                 key = session_of(dt, None)
+                if wanted is not None and key not in wanted:
+                    continue
                 by_day.setdefault(key, []).append((dt, price, bid, ask, ticks))
     except FileNotFoundError:
         return None, 0
@@ -416,10 +434,27 @@ def main():
     print(f"  coverage: {days[0]} -> {days[-1]}  ({len(days)} dates)")
 
     sessions, medians = build_sessions(bars)
+    zone = ZoneInfo(args.tz)
 
     foot = None
     if args.footprint:
-        foot, foot_bad = load_footprint(args.footprint)
+        wanted = None
+        if args.signals:
+            wanted = set()
+            with open(args.signals) as sf:
+                for line in sf:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    head = line.split(",")[0]
+                    try:
+                        local = datetime.fromisoformat(head).replace(tzinfo=zone)
+                    except ValueError:
+                        continue
+                    wanted.add(session_of(local.astimezone(timezone.utc), None))
+            print(f"  footprint: keeping only {len(wanted)} session(s) that the signals fall in")
+
+        foot, foot_bad = load_footprint(args.footprint, wanted)
         if foot is None:
             sys.exit(f"footprint file not found: {args.footprint}")
         fdays = sorted(foot)
@@ -427,7 +462,6 @@ def main():
         print(f"  {args.footprint:24} {levels:>9,} price rows over {len(fdays)} sessions"
               + (f", {foot_bad} malformed skipped" if foot_bad else ""))
         print(f"  footprint sessions: {fdays[0]} -> {fdays[-1]}")
-    zone = ZoneInfo(args.tz)
     signals = []
 
     if args.signals:

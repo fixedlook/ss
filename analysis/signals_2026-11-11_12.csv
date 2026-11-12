@@ -1,0 +1,33 @@
+# Signals, timestamps as pasted from the platform.
+# VERIFIED against bars.csv: these wall-clock times are UTC+2, i.e. one hour ahead of Europe/Rome.
+# Proof: shifting Rome -> UTC by one extra hour puts 25/25 prices inside the matching bar's range.
+# The pasted "a day ago" rows are 2026-11-11, "today" is 2026-11-12 (the export was written 11-12 21:29).
+# run: python3 analysis/study.py --signals analysis/signals_2026-11-11_12.csv \
+#          --tz Europe/Athens --footprint compressed_data.csv.gz
+# 2026-11-12
+2026-11-12T19:53,28392.00,
+2026-11-12T17:20,28627.75,bearish
+2026-11-12T16:56,28447.00,bearish
+2026-11-12T15:54,28361.75,bearish
+2026-11-12T15:39,28306.00,bearish
+2026-11-12T15:38,28313.25,bullish
+2026-11-12T11:46,28272.50,bearish
+2026-11-12T10:39,28307.75,bearish
+2026-11-12T10:29,28261.25,bearish
+2026-11-12T10:25,28252.25,bearish
+2026-11-12T07:12,28196.00,bullish
+2026-11-12T06:44,28138.75,bullish
+2026-11-12T06:31,28144.25,bullish
+2026-11-12T06:25,28156.50,bullish
+2026-11-12T06:19,28165.25,bullish
+2026-11-12T06:14,28174.75,bullish
+2026-11-12T05:58,28206.25,bullish
+2026-11-12T04:56,28214.75,bullish
+2026-11-12T04:37,28235.50,bullish
+# 2026-11-11
+2026-11-11T21:42,28507.75,bullish
+2026-11-11T21:11,28532.25,bullish
+2026-11-11T20:21,28548.50,bearish
+2026-11-11T19:25,28674.75,bearish
+2026-11-11T18:02,28612.75,bullish
+2026-11-11T13:58,28357.00,bearish
