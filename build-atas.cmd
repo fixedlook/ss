@@ -5,12 +5,14 @@ setlocal
 cd /d "%~dp0"
 echo === Building ATAS History Exporter ===
 dotnet build "atas\HistoryExporter\HistoryExporter.csproj" -c Release -p:Install=true
+set DLL_DIR=atas\HistoryExporter\bin\Release\net10.0-windows
 if errorlevel 1 (
   echo.
   echo Build failed - copy the messages above.
 ) else (
   echo.
-  echo Done. In ATAS add the indicator "History Exporter" to a 1-minute MNQ chart.
+  echo Done. The DLL is at: %CD%\%DLL_DIR%\HistoryExporter.dll
+  echo In ATAS add the indicator "History Exporter" to a 1-minute MNQ chart.
 )
 endlocal
 pause
