@@ -67,7 +67,9 @@
     </ItemGroup>
 
     <MakeDir Directories="@(_AtasDest)" Condition="'@(_AtasDest)' != ''" />
-    <Copy SourceFiles="$(TargetPath)"
+    <!-- Both lists must be the same length: the transform repeats the source once per destination.
+         Copying one file to many folders with a single SourceFiles entry is what MSB3094 rejected. -->
+    <Copy SourceFiles="@(_AtasDest->'$(TargetPath)')"
           DestinationFiles="@(_AtasDest->'%(Identity)\$(TargetFileName)')"
           Condition="'@(_AtasDest)' != ''" />
 
