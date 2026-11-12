@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- History Exporter - ATAS / ATAS X chart indicator.
+       Dumps the bars and footprint already loaded on the chart to CSV. No live capture.
+
+       Build:
+           dotnet build -c Release
+           dotnet build -c Release -p:AtasBase="C:\Program Files (x86)\ATAS Platform"
+           dotnet build -c Release -p:AtasBase="/Applications/ATAS X.app/Contents/MonoBundle"
+
+       Output: bin/Release/net10.0-windows/HistoryExporter.dll
+       Copy it into %APPDATA%\ATAS X\Extensions (or %APPDATA%\ATAS\Indicators), or use
+       "Add custom indicator" in the indicators window.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>HistoryExporter</AssemblyName>
+    <RootNamespace>Atas.Indicators.HistoryExport</RootNamespace>
+
+    <!-- Override with -p:AtasBase=... -->
+    <AtasBase Condition="'$(AtasBase)' == ''">C:\Program Files\ATAS X</AtasBase>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="ATAS.Indicators">
+      <HintPath>$(AtasBase)\ATAS.Indicators.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Utils.Common">
+      <HintPath>$(AtasBase)\Utils.Common.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>
