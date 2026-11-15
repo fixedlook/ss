@@ -49,9 +49,18 @@ jobs:
       - name: Maths tests (the C# that ships in the DLL)
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
-          dotnet run --project gex-walls/tests/GexMathTests.csproj -c Release
-          if ($LASTEXITCODE -ne 0) { throw "C# maths tests failed ($LASTEXITCODE)" }
+          # Job log downloads are not available from every environment, but
+          # annotations are - so re-emit the interesting lines as ::error::.
+          $output = & dotnet run --project gex-walls/tests/GexMathTests.csproj -c Release 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          Write-Host $output
+          if ($code -ne 0) {
+            $output -split "`r?`n" |
+              Where-Object { $_ -match 'FAIL|error CS|error MSB|Unhandled exception|Exception:' } |
+              Select-Object -First 10 |
+              ForEach-Object { Write-Host "::error::$_" }
+            throw "C# maths tests failed ($code)"
+          }
 
       - name: Fetch ATAS reference assemblies
         shell: pwsh

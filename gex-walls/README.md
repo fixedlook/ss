@@ -217,6 +217,49 @@ same JSON, keep the same ten keys.
 
 ---
 
+## This is not OPRA — here is exactly what that costs
+
+OPRA is the consolidated tape every US options exchange feeds, and it is
+licensed; there is no free access to it. What CBOE publishes is **its own**
+delayed book. Whether that matters depends on the underlying:
+
+| Underlying | Listing venues | What the delay actually costs |
+| --- | --- | --- |
+| `_SPX`, `_NDX`, `_RUT`, `_DJX`, `_VIX` | **CBOE only** | Only the 15 minutes. These are single-listed index options: there is no other venue's book to miss, so CBOE *is* the market for them. |
+| `SPY`, `QQQ`, `IWM`, `GLD`, `TLT` | 17–18 venues | Real accuracy. You see CBOE's share of a multi-listed market, not the NBBO. Treat levels off an ETF chain as indicative. |
+
+That is why the auto-mapping sends NQ to `_NDX` (a complete index book) rather
+than to QQQ.
+
+Ranked by how much each gap moves a level:
+
+1. **Freshness — 15 minutes.** Quotes, spot and greeks are all delayed together.
+   Level *placement* is re-anchored to the live chart price (`AlignToChart`), so
+   a stale index spot does not shift the lines; but the gammas that chose the
+   strikes are 15 minutes old. Near-the-money walls drift.
+2. **Open interest is the previous session's.** Same for every vendor — it comes
+   from OCC clearing, not the quote feed. `Volume as OI for 0DTE` exists for the
+   window before the overnight file posts.
+3. **Greeks are CBOE's model output** from the delayed mid. Vendors differ here.
+   The indicator cross-checks the gamma column against Black-Scholes gamma
+   re-derived from the same row's `iv` and warns when they disagree at spot.
+4. **The dealer sign is an assumption, not data.** `+call gamma, −put gamma` is
+   the industry convention; real dealer positioning is not published, free or
+   otherwise.
+5. **The flip holds each contract's IV constant** while re-pricing (sticky
+   strike). A surface-aware flip that moves the smile with spot lands a few
+   tenths of a percent away.
+6. **Futures options are not in this source at all.** NQ/ES options trade on
+   CME, not CBOE. Compare against a feed built from NQ futures OI and the
+   strikes differ no matter how correct the arithmetic is.
+
+For real-time consolidated greeks you need a paid feed (CBOE DataShop, Polygon,
+Tradier, GEXBot, SpotGamma). `LocalJsonFile` mode exists so one can be dropped
+in without touching the indicator: write the same ten keys and walls, flip,
+mapping and drawing all keep working.
+
+---
+
 ## Free option-chain sources, and what each is worth
 
 | Source | Cost | Delay | Notes |

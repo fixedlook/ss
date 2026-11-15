@@ -104,6 +104,8 @@ namespace GexWalls
         private string _lastBlockedLog = "";
         private string _lastAuditLog;
         private string _lastIncompleteSource;
+        private DateTime _lastSuccessUtc;
+        private DateTime _lastFreezeWarningUtc;
         private string _stepsSource = "";
         private int _stepsVersion;
         private int _lastWrittenBar = -1;
@@ -707,6 +709,8 @@ namespace GexWalls
             if ((now - _lastRequestUtc).TotalSeconds < Math.Max(30, _refreshSeconds))
                 return;
 
+            CheckFreshness(now);
+
             var source = CanonicalSource(ResolveSource());
             if (string.IsNullOrEmpty(source))
             {
@@ -797,6 +801,7 @@ namespace GexWalls
                     LocalLevelsFile.SaveAudit(snapshot, BuildLevelOptions());
                 }
 
+                _lastSuccessUtc = DateTime.UtcNow;
                 LogAudit(snapshot);
 
                 if (_disposed)
@@ -1155,7 +1160,7 @@ namespace GexWalls
                 var age = (DateTime.UtcNow - snapshot.UpdatedUtc).TotalMinutes;
                 var line = string.Format(
                     "map {0}: source={1}{2} spot={3:0.##} chart={4:0.##} scale={5:0.#####} offset={6:0.##} " +
-                    "age={7:0.#}m contracts={8} | zero={9} call1={10} call2={11} put1={12} put2={13} " +
+                    "since-fetch={7:0.#}m contracts={8} | zero={9} call1={10} call2={11} put1={12} put2={13} " +
                     "iv1={14} iv2={15} mp={16} emH={17} emL={18}",
                     mapping,
                     string.IsNullOrEmpty(snapshot.Source) ? "?" : snapshot.Source,
@@ -1287,10 +1292,55 @@ namespace GexWalls
                             audit.ChainGexAtSpot, audit.BsGexAtSpot, ratio));
                     }
                 }
+                // Coverage: levels are only as good as the greeks behind them.
+                // A chain that is half-missing iv still draws walls, so say so.
+                var inWindow = audit.ContractsUsed + audit.ExcludedNoOiOrGamma;
+                if (inWindow > 0)
+                {
+                    var coverage = (decimal)audit.ContractsUsed / inWindow;
+                    if (coverage < 0.85m)
+                    {
+                        Log(string.Format(
+                            "WARNING source coverage: only {0:0.#}% of the {1} contracts inside the dte/strike " +
+                            "window carried open interest and greeks ({2} had none) - the levels from this " +
+                            "snapshot are computed on a partial book",
+                            coverage * 100m, inWindow, audit.ExcludedNoOiOrGamma));
+                    }
+                }
             }
             catch
             {
                 // diagnostics must never break the drawing
+            }
+        }
+
+        /// <summary>
+        /// Says something when the data has stopped arriving. A frozen chart looks
+        /// exactly like a wrong one, and this is the difference.
+        /// </summary>
+        private void CheckFreshness(DateTime nowUtc)
+        {
+            try
+            {
+                if (_lastSuccessUtc == DateTime.MinValue)
+                    return;
+
+                var staleAfter = TimeSpan.FromSeconds(Math.Max(180, _refreshSeconds * 3));
+                if ((nowUtc - _lastSuccessUtc) < staleAfter)
+                    return;
+
+                if ((nowUtc - _lastFreezeWarningUtc) < TimeSpan.FromMinutes(5))
+                    return;
+
+                _lastFreezeWarningUtc = nowUtc;
+                Log(string.Format(
+                    "no successful chain update for {0:0} minutes - the levels on screen are from the last " +
+                    "good snapshot ({1:HH:mm:ss} local)",
+                    (nowUtc - _lastSuccessUtc).TotalMinutes, _lastSuccessUtc.ToLocalTime()));
+            }
+            catch
+            {
+                // ignore
             }
         }
 
