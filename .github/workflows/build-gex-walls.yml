@@ -100,15 +100,19 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $dll = Resolve-Path 'gex-walls/src/GexWalls/bin/Release/GexWalls.dll'
           $bytes = [System.IO.File]::ReadAllBytes($dll)
-          $text = [System.Text.Encoding]::Latin1.GetString($bytes)
+          $meta = [System.Text.Encoding]::Latin1.GetString($bytes)   # #Strings heap: type and member names
+          $lits = [System.Text.Encoding]::Unicode.GetString($bytes)  # #US heap: string literals
 
-          # The indicator must be discoverable by ATAS and must not have picked up
-          # a private copy of the platform assemblies (Private=false in the csproj).
-          'GexWallsIndicator','GEX / IV Walls (CBOE)','zero_gamma','ValueDataSeries','RedrawChart' | ForEach-Object {
-            if ($text -notmatch [regex]::Escape($_)) { throw "assembly is missing expected symbol: $_" }
-            Write-Host "  found: $_"
+          # type/member names ATAS needs to find by reflection
+          'GexWallsIndicator','GexWalls','ValueDataSeries','RedrawChart','InstrumentInfo' | ForEach-Object {
+            if ($meta -notmatch [regex]::Escape($_)) { throw "assembly is missing expected symbol: $_" }
+            Write-Host "  name found: $_"
           }
-          if ($text -match 'InvalidOperationException') { Write-Host '  (note: InvalidOperationException string present)' }
+          # the DisplayName ATAS shows in the indicator list
+          'GEX / IV Walls (CBOE)' | ForEach-Object {
+            if ($lits -notmatch [regex]::Escape($_)) { throw "assembly is missing expected literal: $_" }
+            Write-Host "  literal found: $_"
+          }
 
           $strays = Get-ChildItem 'gex-walls/src/GexWalls/bin/Release' -Filter '*.dll' |
             Where-Object { $_.Name -ne 'GexWalls.dll' }
@@ -127,30 +131,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          $ErrorActionPreference = 'Stop'
           $tag = $env:RELEASE_TAG
-          gh release view $tag 2>$null
+          gh release view $tag *> $null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag `
-              --target $env:GITHUB_SHA `
-              --title 'GEX / IV Walls indicator for ATAS' `
-              --notes @'
-Drop-in ATAS custom indicator built from `gex-walls/` by CI.
-
-What it does: pulls CBOE's free delayed option chain, computes dealer gamma
-walls, the zero-gamma flip, IV walls, max pain and the expected-move band, and
-draws them on the price chart - refreshed on a timer, with the previous value
-kept on the bars where it was in force.
-
-Install: copy `GexWalls.dll` into `%APPDATA%\ATAS X\Indicators\`, reload custom
-indicators in ATAS, then add **GEX / IV Walls (CBOE)** from the Custom group.
-
-Built against the ATAS reference assemblies pinned in the workflow; if ATAS
-rejects it, rebuild locally with your own install folder:
-
-    dotnet build -c Release -p:AtasDir="C:\Program Files\ATAS X"
-
-Logs and cached levels: `%APPDATA%\ATAS X\GexWalls\`.
-'@
+            gh release create $tag --target $env:GITHUB_SHA --title 'GEX / IV Walls indicator for ATAS' --notes-file 'gex-walls/RELEASE_NOTES.md'
             if ($LASTEXITCODE -ne 0) { throw "gh release create failed ($LASTEXITCODE)" }
           }
           gh release upload $tag 'gex-walls/src/GexWalls/bin/Release/GexWalls.dll' --clobber
