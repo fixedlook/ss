@@ -751,11 +751,12 @@ namespace GexWalls
             var instrument = "";
             try
             {
-                instrument = (Instrument ?? "").ToUpperInvariant();
+                // Indicator.Instrument is obsolete in ATAS X
+                instrument = (InstrumentInfo.Instrument ?? "").ToUpperInvariant();
             }
             catch
             {
-                // Instrument is not available during construction
+                // not available yet (during construction, or no instrument bound)
             }
 
             if (instrument.Contains("NQ"))

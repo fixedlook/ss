@@ -164,10 +164,15 @@ jobs:
             }
           }
 
-          if ($utf16 -notmatch [regex]::Escape('GEX / IV Walls (CBOE)')) {
-            $problems += 'missing DisplayName literal: GEX / IV Walls (CBOE)'
+          # Attribute string arguments are UTF-8 SerStrings in the #Blob heap;
+          # other literals are UTF-16 in #US. Check both views.
+          $literal = 'GEX / IV Walls (CBOE)'
+          $inMeta = $meta -match [regex]::Escape($literal)
+          $inUtf16 = -not ($utf16 -notmatch [regex]::Escape($literal))
+          if ($inMeta -or $inUtf16) {
+            Write-Host "  ok DisplayName literal (utf8: $inMeta, utf16: $inUtf16)"
           } else {
-            Write-Host '  ok literal: GEX / IV Walls (CBOE)'
+            $problems += "missing DisplayName literal: $literal"
           }
 
           # The assembly must not ship private copies of the platform assemblies.
