@@ -143,24 +143,49 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $dll = Resolve-Path 'gex-walls/src/GexWalls/bin/Release/GexWalls.dll'
           $bytes = [System.IO.File]::ReadAllBytes($dll)
-          $meta = [System.Text.Encoding]::Latin1.GetString($bytes)   # #Strings heap: type and member names
-          $lits = [System.Text.Encoding]::Unicode.GetString($bytes)  # #US heap: string literals
 
-          # type/member names ATAS needs to find by reflection
-          'GexWallsIndicator','GexWalls','ValueDataSeries','RedrawChart','InstrumentInfo' | ForEach-Object {
-            if ($meta -notmatch [regex]::Escape($_)) { throw "assembly is missing expected symbol: $_" }
-            Write-Host "  name found: $_"
-          }
-          # the DisplayName ATAS shows in the indicator list
-          'GEX / IV Walls (CBOE)' | ForEach-Object {
-            if ($lits -notmatch [regex]::Escape($_)) { throw "assembly is missing expected literal: $_" }
-            Write-Host "  literal found: $_"
+          # Names (types, members) are UTF-8 in the #Strings heap.
+          $meta = [System.Text.Encoding]::Latin1.GetString($bytes)
+
+          # String literals are UTF-16LE in the #US heap, and a literal can start
+          # at an odd byte offset, so decode both alignments.
+          $utf16 = @(
+            [System.Text.Encoding]::Unicode.GetString($bytes),
+            [System.Text.Encoding]::Unicode.GetString($bytes, 1, $bytes.Length - 1)
+          )
+
+          $problems = @()
+
+          foreach ($name in 'GexWallsIndicator','ValueDataSeries','RedrawChart','InstrumentInfo','ATAS.Indicators') {
+            if ($meta -notmatch [regex]::Escape($name)) {
+              $problems += "missing name in metadata: $name"
+            } else {
+              Write-Host "  ok name: $name"
+            }
           }
 
-          $strays = Get-ChildItem 'gex-walls/src/GexWalls/bin/Release' -Filter '*.dll' |
-            Where-Object { $_.Name -ne 'GexWalls.dll' }
-          if ($strays) { Write-Host "WARNING - extra assemblies in the output folder: $($strays.Name -join ', ')" }
-          else { Write-Host '  output folder contains GexWalls.dll only' }
+          if ($utf16 -notmatch [regex]::Escape('GEX / IV Walls (CBOE)')) {
+            $problems += 'missing DisplayName literal: GEX / IV Walls (CBOE)'
+          } else {
+            Write-Host '  ok literal: GEX / IV Walls (CBOE)'
+          }
+
+          # The assembly must not ship private copies of the platform assemblies.
+          $strays = @(Get-ChildItem 'gex-walls/src/GexWalls/bin/Release' -Filter '*.dll' |
+            Where-Object { $_.Name -ne 'GexWalls.dll' })
+          if ($strays.Count -gt 0) {
+            $problems += "unexpected assemblies next to the indicator: $($strays.Name -join ', ')"
+          } else {
+            Write-Host '  ok output folder contains GexWalls.dll only'
+          }
+
+          Write-Host ("  dll size: {0:N0} bytes" -f $bytes.Length)
+
+          if ($problems.Count -gt 0) {
+            foreach ($problem in $problems) { Write-Host "::error::$problem" }
+            throw "assembly smoke test failed with $($problems.Count) problem(s)"
+          }
+          Write-Host '::notice::assembly smoke test passed'
 
       - uses: actions/upload-artifact@v4
         with:
