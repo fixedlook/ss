@@ -121,13 +121,20 @@ namespace GexWalls.Tests
                 Math.Abs(atmGamma - 0.0198477m) < 0.0000005m,
                 atmGamma.ToString("0.0000000"));
 
-            // gamma depends on ln(S/K) through a symmetric pdf, so an equal
-            // percentage either side of the money must give the same value
-            var above = GexMath.BlackScholesGamma(100m, 110m, 0.25m, 0.3m);
-            var below = GexMath.BlackScholesGamma(100m, 90.9090909m, 0.25m, 0.3m);
-            Check("gamma is symmetric around the money",
-                Math.Abs(above - below) < 0.000000001m,
-                above.ToString("0.00000000") + " vs " + below.ToString("0.00000000"));
+            // gamma peaks near the money and falls off in both directions.
+            // (It is NOT symmetric in strike: d1 carries the +vol^2*T/2 drift, so
+            // an equal percentage either side of spot gives different values -
+            // 0.0207 above vs 0.0227 below at these inputs.)
+            var atMoney = GexMath.BlackScholesGamma(100m, 100m, 0.25m, 0.3m);
+            var upper = GexMath.BlackScholesGamma(100m, 110m, 0.25m, 0.3m);
+            var lower = GexMath.BlackScholesGamma(100m, 90m, 0.25m, 0.3m);
+            var lowVol = GexMath.BlackScholesGamma(100m, 100m, 0.25m, 0.1m);
+            Check("gamma peaks near the money",
+                atMoney > upper && atMoney > lower,
+                "atm " + atMoney.ToString("0.00000") + " vs " + upper.ToString("0.00000") +
+                " / " + lower.ToString("0.00000"));
+            Check("gamma falls as implied vol rises", lowVol > atMoney,
+                lowVol.ToString("0.00000") + " vs " + atMoney.ToString("0.00000"));
 
             Check("gamma is safe at zero everything",
                 GexMath.BlackScholesGamma(0m, 100m, 1m, 0.2m) == 0m &&
