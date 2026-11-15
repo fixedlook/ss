@@ -67,29 +67,48 @@ jobs:
               Write-Host ("  ok {0,-22} {1,9:N0} bytes" -f "$dll.dll", $len)
             }
 
-            $indexUrl = 'https://api.nuget.org/v3-flatcontainer/avalonia.base/index.json'
-            Write-Host "GET $indexUrl"
-            $versions = (Invoke-RestMethod -Uri $indexUrl).versions
-            $version = $versions |
-              Where-Object { $_ -like '11.*' -and $_ -notmatch '-' } |
-              Sort-Object { [version]$_ } |
-              Select-Object -Last 1
-            if (-not $version) { throw "no stable Avalonia.Base 11.x version found (got: $($versions -join ', '))" }
-            Write-Host "Avalonia.Base version: $version"
+            # Avalonia.Base.dll is shipped inside one of the Avalonia packages, and
+            # which one depends on the Avalonia version. Try the candidates in turn
+            # and stop at the first package that actually contains the assembly.
+            $candidates = 'avalonia','avalonia.base','avalonia.controls','avalonia.desktop'
+            $copied = $false
+            foreach ($package in $candidates) {
+              $indexUrl = "https://api.nuget.org/v3-flatcontainer/$package/index.json"
+              try {
+                $versions = (Invoke-RestMethod -Uri $indexUrl).versions
+              }
+              catch {
+                Write-Host "  $package : no such package ($($_.Exception.Message))"
+                continue
+              }
 
-            $nupkg = Join-Path $env:RUNNER_TEMP 'avalonia.base.zip'
-            $nupkgUrl = "https://api.nuget.org/v3-flatcontainer/avalonia.base/$version/avalonia.base.$version.nupkg"
-            Write-Host "GET $nupkgUrl"
-            Invoke-WebRequest -Uri $nupkgUrl -OutFile $nupkg
-            $extract = Join-Path $env:RUNNER_TEMP 'avalonia.base'
-            Expand-Archive -Path $nupkg -DestinationPath $extract -Force
-            Write-Host "extracted: $((Get-ChildItem -Recurse $extract -Filter '*.dll' | Select-Object -First 8).Name -join ', ')"
+              $version = $versions |
+                Where-Object { $_ -like '11.*' -and $_ -notmatch '-' } |
+                Sort-Object { [version]$_ } |
+                Select-Object -Last 1
+              if (-not $version) { Write-Host "  $package : no stable 11.x version"; continue }
 
-            $found = Get-ChildItem -Path $extract -Filter 'Avalonia.Base.dll' -Recurse |
-              Sort-Object FullName | Select-Object -Last 1
-            if (-not $found) { throw 'Avalonia.Base.dll not found in the nuget package' }
-            Copy-Item $found.FullName (Join-Path $libs 'Avalonia.Base.dll')
-            Write-Host ("  ok Avalonia.Base.dll     {0,9:N0} bytes" -f $found.Length)
+              $nupkg = Join-Path $env:RUNNER_TEMP "$package.zip"
+              $nupkgUrl = "https://api.nuget.org/v3-flatcontainer/$package/$version/$package.$version.nupkg"
+              Write-Host "GET $nupkgUrl"
+              Invoke-WebRequest -Uri $nupkgUrl -OutFile $nupkg
+              $extract = Join-Path $env:RUNNER_TEMP $package
+              Expand-Archive -Path $nupkg -DestinationPath $extract -Force
+
+              $found = Get-ChildItem -Path $extract -Filter 'Avalonia.Base.dll' -Recurse |
+                Sort-Object FullName | Select-Object -Last 1
+              if (-not $found) {
+                Write-Host "  $package $version : Avalonia.Base.dll not inside"
+                continue
+              }
+
+              Copy-Item $found.FullName (Join-Path $libs 'Avalonia.Base.dll')
+              Write-Host ("  ok Avalonia.Base.dll  {0,9:N0} bytes from {1} {2}" -f $found.Length, $package, $version)
+              $copied = $true
+              break
+            }
+
+            if (-not $copied) { throw 'Avalonia.Base.dll could not be located in any Avalonia nuget package' }
 
             Write-Host "::notice::reference assemblies ready (Avalonia.Base $version)"
           }
