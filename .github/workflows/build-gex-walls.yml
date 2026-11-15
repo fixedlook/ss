@@ -49,50 +49,74 @@ jobs:
       - name: Fetch ATAS reference assemblies
         shell: pwsh
         run: |
+          # Any failure here is reported as a ::error:: annotation, which is
+          # readable through the API even when log downloads are unavailable.
           $ErrorActionPreference = 'Stop'
-          $libs = Join-Path $env:GITHUB_WORKSPACE 'libs'
-          New-Item -ItemType Directory -Force -Path $libs | Out-Null
+          try {
+            $libs = Join-Path $env:GITHUB_WORKSPACE 'libs'
+            New-Item -ItemType Directory -Force -Path $libs | Out-Null
 
-          $base = "https://raw.githubusercontent.com/$env:ATAS_REFS_REPO/$env:ATAS_REFS_SHA/libs"
-          $dlls = 'ATAS.Indicators','ATAS.DataFeedsCore','OFT.Rendering','OFT.Attributes','OFT.Core','OFT.Platform.Core'
-          foreach ($dll in $dlls) {
-            Invoke-WebRequest -Uri "$base/$dll.dll" -OutFile (Join-Path $libs "$dll.dll")
-            Write-Host ("  {0,-22} {1,9:N0} bytes" -f "$dll.dll", (Get-Item (Join-Path $libs "$dll.dll")).Length)
+            $base = "https://raw.githubusercontent.com/$env:ATAS_REFS_REPO/$env:ATAS_REFS_SHA/libs"
+            $dlls = 'ATAS.Indicators','ATAS.DataFeedsCore','OFT.Rendering','OFT.Attributes','OFT.Core','OFT.Platform.Core'
+            foreach ($dll in $dlls) {
+              $url = "$base/$dll.dll"
+              Write-Host "GET $url"
+              Invoke-WebRequest -Uri $url -OutFile (Join-Path $libs "$dll.dll")
+              $len = (Get-Item (Join-Path $libs "$dll.dll")).Length
+              if ($len -lt 4096) { throw "$dll.dll looks truncated ($len bytes) - is it an LFS pointer?" }
+              Write-Host ("  ok {0,-22} {1,9:N0} bytes" -f "$dll.dll", $len)
+            }
+
+            $indexUrl = 'https://api.nuget.org/v3-flatcontainer/avalonia.base/index.json'
+            Write-Host "GET $indexUrl"
+            $versions = (Invoke-RestMethod -Uri $indexUrl).versions
+            $version = $versions |
+              Where-Object { $_ -like '11.*' -and $_ -notmatch '-' } |
+              Sort-Object { [version]$_ } |
+              Select-Object -Last 1
+            if (-not $version) { throw "no stable Avalonia.Base 11.x version found (got: $($versions -join ', '))" }
+            Write-Host "Avalonia.Base version: $version"
+
+            $nupkg = Join-Path $env:RUNNER_TEMP 'avalonia.base.zip'
+            $nupkgUrl = "https://api.nuget.org/v3-flatcontainer/avalonia.base/$version/avalonia.base.$version.nupkg"
+            Write-Host "GET $nupkgUrl"
+            Invoke-WebRequest -Uri $nupkgUrl -OutFile $nupkg
+            $extract = Join-Path $env:RUNNER_TEMP 'avalonia.base'
+            Expand-Archive -Path $nupkg -DestinationPath $extract -Force
+            Write-Host "extracted: $((Get-ChildItem -Recurse $extract -Filter '*.dll' | Select-Object -First 8).Name -join ', ')"
+
+            $found = Get-ChildItem -Path $extract -Filter 'Avalonia.Base.dll' -Recurse |
+              Sort-Object FullName | Select-Object -Last 1
+            if (-not $found) { throw 'Avalonia.Base.dll not found in the nuget package' }
+            Copy-Item $found.FullName (Join-Path $libs 'Avalonia.Base.dll')
+            Write-Host ("  ok Avalonia.Base.dll     {0,9:N0} bytes" -f $found.Length)
+
+            Write-Host "::notice::reference assemblies ready (Avalonia.Base $version)"
           }
-
-          # ATAS X is Avalonia-based; Dispatcher/DispatcherTimer come from here.
-          $index = Invoke-RestMethod 'https://api.nuget.org/v3-flatcontainer/avalonia.base/index.json'
-          $version = $index.versions |
-            Where-Object { $_ -like '11.*' -and $_ -notmatch '-' } |
-            Sort-Object { [version]$_ } |
-            Select-Object -Last 1
-          Write-Host "Avalonia.Base version: $version"
-
-          $nupkg = Join-Path $env:RUNNER_TEMP 'avalonia.base.zip'
-          Invoke-WebRequest -Uri "https://api.nuget.org/v3-flatcontainer/avalonia.base/$version/avalonia.base.$version.nupkg" -OutFile $nupkg
-          $extract = Join-Path $env:RUNNER_TEMP 'avalonia.base'
-          Expand-Archive -Path $nupkg -DestinationPath $extract -Force
-
-          $dll = Get-ChildItem -Path (Join-Path $extract 'lib') -Filter 'Avalonia.Base.dll' -Recurse |
-            Sort-Object { $_.FullName } | Select-Object -Last 1
-          if (-not $dll) { throw 'Avalonia.Base.dll not found in the NuGet package' }
-          Copy-Item $dll.FullName (Join-Path $libs 'Avalonia.Base.dll')
-          Write-Host ("  Avalonia.Base.dll      {0,9:N0} bytes from {1}" -f $dll.Length, $dll.FullName)
+          catch {
+            Write-Host "::error::reference fetch failed: $($_.Exception.Message)"
+            $where = ($_.InvocationInfo.PositionMessage -replace "`r?`n", ' ')
+            if ($where) { Write-Host "::error::thrown at $where" }
+            throw
+          }
 
       - name: Build
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $atasDir = Join-Path $env:GITHUB_WORKSPACE 'libs'
-          dotnet build gex-walls/src/GexWalls/GexWalls.csproj `
-            -c Release `
-            -p:AtasDir="$atasDir" `
-            -p:TreatWarningsAsErrors=false
-          if ($LASTEXITCODE -ne 0) { throw "dotnet build failed ($LASTEXITCODE)" }
+          try {
+            $atasDir = Join-Path $env:GITHUB_WORKSPACE 'libs'
+            dotnet build gex-walls/src/GexWalls/GexWalls.csproj -c Release "-p:AtasDir=$atasDir"
+            if ($LASTEXITCODE -ne 0) { throw "dotnet build failed with exit code $LASTEXITCODE" }
 
-          $dll = 'gex-walls/src/GexWalls/bin/Release/GexWalls.dll'
-          if (-not (Test-Path $dll)) { throw "expected output missing: $dll" }
-          Write-Host ("Built {0} ({1:N0} bytes)" -f $dll, (Get-Item $dll).Length)
+            $dll = 'gex-walls/src/GexWalls/bin/Release/GexWalls.dll'
+            if (-not (Test-Path $dll)) { throw "expected output missing: $dll" }
+            Write-Host ("::notice::built GexWalls.dll ({0:N0} bytes)" -f (Get-Item $dll).Length)
+          }
+          catch {
+            Write-Host "::error::build failed: $($_.Exception.Message)"
+            throw
+          }
 
       - name: Smoke-test the assembly
         shell: pwsh
