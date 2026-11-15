@@ -96,6 +96,12 @@ namespace GexWalls
         private string _sourceUsed = "";
         private ChainSnapshot _lastChain;
         private bool _recomputePending;
+        private bool _disposed;
+        private bool _loggedNoSource;
+        private string _stepsSource = "";
+        private int _stepsVersion;
+        private int _lastWrittenBar = -1;
+        private int _lastWrittenVersion = -1;
 
         private Color _zeroGammaColor = Color.Gold;
         private Color _callWallColor = Color.LimeGreen;
@@ -209,7 +215,7 @@ namespace GexWalls
                 if (_autoSource == value)
                     return;
                 _autoSource = value;
-                RecalculateValues();
+                OnSettingChanged(refetch: true, recompute: false);
             }
         }
 
@@ -224,7 +230,7 @@ namespace GexWalls
                 if (_sourceSymbol == text)
                     return;
                 _sourceSymbol = text;
-                RecalculateValues();
+                OnSettingChanged(refetch: true, recompute: false);
             }
         }
 
@@ -239,7 +245,7 @@ namespace GexWalls
                 if (_dataSourceMode == value)
                     return;
                 _dataSourceMode = value;
-                _lastRequestUtc = DateTime.MinValue;
+                OnSettingChanged(refetch: true, recompute: false);
             }
         }
 
@@ -248,7 +254,11 @@ namespace GexWalls
         public int RefreshSeconds
         {
             get => _refreshSeconds;
-            set => _refreshSeconds = value < 30 ? 30 : value;
+
+            // Clamping here made the dialog show a value the user never typed,
+            // which reads as "my setting did not stick". The fetch path already
+            // enforces the 30 s floor.
+            set => _refreshSeconds = value < 0 ? 0 : value;
         }
 
         [Display(Name = "Min days to expiry", GroupName = "Data", Order = 14)]
@@ -260,7 +270,7 @@ namespace GexWalls
                 if (_minDte == value)
                     return;
                 _minDte = value < 0 ? 0 : value;
-                RequestRecompute();
+                OnSettingChanged(refetch: false, recompute: true);
             }
         }
 
@@ -274,7 +284,7 @@ namespace GexWalls
                 if (_maxDte == value)
                     return;
                 _maxDte = value < 0 ? 0 : value;
-                RequestRecompute();
+                OnSettingChanged(refetch: false, recompute: true);
             }
         }
 
@@ -288,7 +298,7 @@ namespace GexWalls
                 if (_maxStrikeDistancePct == value)
                     return;
                 _maxStrikeDistancePct = value < 0m ? 0m : value;
-                RequestRecompute();
+                OnSettingChanged(refetch: false, recompute: true);
             }
         }
 
@@ -303,7 +313,7 @@ namespace GexWalls
                 if (_volumeProxyForToday == value)
                     return;
                 _volumeProxyForToday = value;
-                RequestRecompute();
+                OnSettingChanged(refetch: false, recompute: true);
             }
         }
 
@@ -318,7 +328,7 @@ namespace GexWalls
                 if (_priceMapping == value)
                     return;
                 _priceMapping = value;
-                RequestRecompute();
+                OnSettingChanged(refetch: false, recompute: true);
             }
         }
 
@@ -331,7 +341,7 @@ namespace GexWalls
                 if (_scaleFactor == value)
                     return;
                 _scaleFactor = value;
-                RecalculateValues();
+                OnSettingChanged(refetch: false, recompute: true);
             }
         }
 
@@ -344,7 +354,7 @@ namespace GexWalls
                 if (_priceOffset == value)
                     return;
                 _priceOffset = value;
-                RecalculateValues();
+                OnSettingChanged(refetch: false, recompute: true);
             }
         }
 
@@ -434,9 +444,18 @@ namespace GexWalls
 
         private void SetColor(ref Color field, Color value)
         {
-            field = value;
-            ApplyColors();
-            RedrawAllBars();
+            try
+            {
+                field = value;
+                ApplyColors();
+
+                // A colour belongs to the whole series: no bar values changed.
+                TryRedraw();
+            }
+            catch (Exception exception)
+            {
+                Log("applying a colour failed: " + exception.Message);
+            }
         }
 
         private void SetLevelVisibility(ref bool field, bool value)
@@ -444,12 +463,19 @@ namespace GexWalls
             if (field == value)
                 return;
 
-            field = value;
+            try
+            {
+                field = value;
 
-            foreach (var bar in VisibleBars())
-                WriteBar(bar);
+                foreach (var bar in VisibleBars())
+                    WriteBar(bar);
 
-            TryRedraw();
+                TryRedraw();
+            }
+            catch (Exception exception)
+            {
+                Log("toggling a level failed: " + exception.Message);
+            }
         }
 
         #endregion
@@ -461,6 +487,8 @@ namespace GexWalls
             if (bar == 0)
             {
                 _barCount = 0;
+                _lastWrittenBar = -1;
+                _lastWrittenVersion = -1;
 
                 if (_levels == null && _steps.Count == 0)
                 {
@@ -486,7 +514,26 @@ namespace GexWalls
             if (_recomputePending)
                 RecomputeLocally();
 
-            WriteBar(bar);
+            // A snapshot can arrive before the first bar exists; paint it as soon
+            // as there is somewhere to put it.
+            if (_steps.Count == 0 && _levels != null)
+                ApplyLevels(_levels);
+
+            // The forming bar only needs rewriting when its step changed - this
+            // runs on every tick, so the check earns its keep.
+            if (bar != _lastWrittenBar || _stepsVersion != _lastWrittenVersion)
+            {
+                try
+                {
+                    WriteBar(bar);
+                    _lastWrittenBar = bar;
+                    _lastWrittenVersion = _stepsVersion;
+                }
+                catch (Exception exception)
+                {
+                    Log("writing a level failed: " + exception.Message);
+                }
+            }
 
             if (bar == _barCount)
                 MaybeRequestFetch();
@@ -494,6 +541,8 @@ namespace GexWalls
 
         protected override void OnDispose()
         {
+            _disposed = true;
+
             if (_timer != null)
             {
                 try
@@ -515,17 +564,6 @@ namespace GexWalls
         {
             for (var bar = 0; bar <= _barCount; bar++)
                 yield return bar;
-        }
-
-        private void RedrawAllBars()
-        {
-            if (_barCount < 0 || _steps.Count == 0)
-                return;
-
-            foreach (var bar in VisibleBars())
-                WriteBar(bar);
-
-            TryRedraw();
         }
 
         private void WriteBar(int bar)
@@ -626,12 +664,22 @@ namespace GexWalls
 
             var source = ResolveSource();
             if (string.IsNullOrEmpty(source))
+            {
+                if (!_loggedNoSource)
+                {
+                    _loggedNoSource = true;
+                    Log("no CBOE source configured - set 'Source symbol' under Data");
+                }
+
                 return;
+            }
 
             if (!string.Equals(source, _sourceUsed, StringComparison.OrdinalIgnoreCase))
             {
+                // Do not blank the chart here. The previous levels stay visible
+                // until the new chain's first snapshot arrives, and ApplyLevels
+                // repaints the history at that point.
                 _sourceUsed = source;
-                ResetForSourceChange();
             }
 
             _lastRequestUtc = now;
@@ -675,6 +723,9 @@ namespace GexWalls
                 if (_dataSourceMode == DataSourceMode.CboeDelayed)
                     LocalLevelsFile.Save(snapshot);
 
+                if (_disposed)
+                    return;
+
                 await Dispatcher.UIThread.InvokeAsync(() => ApplyLevels(snapshot));
             }
             catch (Exception exception)
@@ -687,11 +738,56 @@ namespace GexWalls
             }
         }
 
-        /// <summary>A filter or mapping changed: the cached chain is enough, no download needed.</summary>
-        private void RequestRecompute()
+        /// <summary>
+        /// Called by every settings setter. It must never throw: when the settings
+        /// dialog is cancelled, ATAS restores the previous values through these
+        /// same setters, and an exception in the middle of that pass aborts the
+        /// restore - which is what made settings impossible to revert.
+        /// </summary>
+        private void OnSettingChanged(bool refetch, bool recompute)
         {
-            _recomputePending = true;
-            RecalculateValues();
+            try
+            {
+                if (refetch)
+                {
+                    // Let the next check pull fresh data; do not do network work
+                    // inside a setter.
+                    _lastRequestUtc = DateTime.MinValue;
+                }
+
+                if (recompute)
+                {
+                    _recomputePending = true;
+
+                    // The cached chain is enough for a filter or mapping change,
+                    // so apply it now instead of waiting for a download.
+                    if (_lastChain != null || _levels != null)
+                        RecomputeLocally();
+                }
+
+                if (refetch)
+                {
+                    // Re-run the refresh check once the dialog has settled, so a
+                    // source change takes effect without waiting for a tick.
+                    Dispatcher.UIThread.Post(() => TryFetch());
+                }
+            }
+            catch (Exception exception)
+            {
+                Log("applying a setting failed: " + exception.Message);
+            }
+        }
+
+        private void TryFetch()
+        {
+            try
+            {
+                MaybeRequestFetch();
+            }
+            catch (Exception exception)
+            {
+                Log("scheduled refresh failed: " + exception.Message);
+            }
         }
 
         private void RecomputeLocally()
@@ -721,26 +817,6 @@ namespace GexWalls
                 MaxStrikeDistancePct = _maxStrikeDistancePct,
                 VolumeProxyForToday = _volumeProxyForToday
             };
-        }
-
-        private void ResetForSourceChange()
-        {
-            _steps.Clear();
-            _levels = null;
-
-            foreach (var slot in _slots)
-            {
-                try
-                {
-                    slot.Series.Clear();
-                }
-                catch
-                {
-                    // series may not be attached yet
-                }
-            }
-
-            TryRedraw();
         }
 
         private string ResolveSource()
@@ -805,10 +881,30 @@ namespace GexWalls
 
         private void ApplyLevels(LevelsSnapshot snapshot)
         {
-            if (snapshot == null || !snapshot.HasAnyLevel || _barCount < 0)
+            if (snapshot == null || !snapshot.HasAnyLevel || _disposed)
                 return;
 
+            // Keep the snapshot even if there are no bars yet - the next
+            // OnCalculate will paint it. Dropping it here left the chart empty
+            // until the following download.
             _levels = snapshot;
+
+            if (_barCount < 0)
+                return;
+
+            // Levels are in the chain's price space. Without a reference price on
+            // the chart the mapping would be wrong, so wait for one.
+            if (EffectiveMapping(snapshot.Source) != PriceMapping.Direct && ChartPrice() <= 0m)
+                return;
+
+            // A different underlying means the stored steps are in the wrong price
+            // space: drop them and repaint the whole history with the new chain.
+            if (!string.Equals(_stepsSource, snapshot.Source, StringComparison.OrdinalIgnoreCase))
+            {
+                _steps.Clear();
+                _stepsSource = snapshot.Source;
+                _stepsVersion++;
+            }
 
             var values = MapLevels(snapshot);
 
@@ -830,6 +926,8 @@ namespace GexWalls
                 WriteBar(_barCount);
             }
 
+            _lastWrittenBar = _barCount;
+            _lastWrittenVersion = _stepsVersion;
             TryRedraw();
         }
 
@@ -847,6 +945,8 @@ namespace GexWalls
 
             if (_steps.Count > MaxSteps)
                 _steps.RemoveRange(0, _steps.Count - MaxSteps);
+
+            _stepsVersion++;
         }
 
         private static bool SameValues(decimal?[] left, decimal?[] right)
