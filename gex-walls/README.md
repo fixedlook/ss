@@ -102,10 +102,14 @@ Anything else falls back to the manual source symbol.
 Built by CI on every push that touches `gex-walls/`, and published as a release
 asset:
 
-**[GexWalls.dll — release gex-walls-v0.1.0](https://github.com/fixedlook/ss/releases/download/gex-walls-v0.1.0/GexWalls.dll)**
+**[GexWalls.dll — release gex-walls-v0.1.1](https://github.com/fixedlook/ss/releases/download/gex-walls-v0.1.1/GexWalls.dll)**
 
-- size: 41,472 bytes
-- sha256: `43c00d180dfd0327d925b852812ca9a10e1dce1d998fbf633109521f3ef42700`
+- size: 42,496 bytes
+- sha256: shown next to the asset on the release page (every rebuild produces
+  new bytes, so the digest lives with the build rather than in this file)
+
+Earlier build, kept for reference: [gex-walls-v0.1.0](https://github.com/fixedlook/ss/releases/tag/gex-walls-v0.1.0) —
+note it has the settings-revert bug fixed in v0.1.1.
 
 Install: copy it into `%APPDATA%\ATAS X\Indicators\` (classic ATAS:
 `%APPDATA%\ATAS\Indicators\`), reload custom indicators in ATAS, then add
