@@ -6,3 +6,6 @@ obj/
 ## local scratch
 tools/_fixture.json
 tools/__pycache__/
+
+## ATAS reference assemblies fetched at build time (never committed)
+libs/

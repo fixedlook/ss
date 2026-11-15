@@ -1,0 +1,158 @@
+name: Build GEX Walls indicator
+
+# Builds gex-walls/src/GexWalls into a drop-in ATAS indicator DLL.
+#
+# The ATAS reference assemblies are proprietary and are NOT in this repo: they
+# are fetched at build time only and never committed. Avalonia.Base comes from
+# NuGet. The one thing that cannot be automated here is matching your exact ATAS
+# build - the DLL is compiled against the reference set pinned below.
+
+on:
+  push:
+    paths:
+      - 'gex-walls/**'
+      - '.github/workflows/build-gex-walls.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  DOTNET_VERSION: '10.0.x'
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  ATAS_REFS_REPO: profitnotiondaily/atasx-superflow
+  ATAS_REFS_SHA: 3af08b0d8f09af64de480d9903ab55c943c2b998
+  RELEASE_TAG: gex-walls-v0.1.0
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Show toolchain
+        shell: pwsh
+        run: |
+          dotnet --version
+          dotnet --list-sdks
+
+      - name: Maths tests (offline, no ATAS needed)
+        shell: pwsh
+        run: python gex-walls/tools/test_gex_math.py
+
+      - name: Fetch ATAS reference assemblies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $libs = Join-Path $env:GITHUB_WORKSPACE 'libs'
+          New-Item -ItemType Directory -Force -Path $libs | Out-Null
+
+          $base = "https://raw.githubusercontent.com/$env:ATAS_REFS_REPO/$env:ATAS_REFS_SHA/libs"
+          $dlls = 'ATAS.Indicators','ATAS.DataFeedsCore','OFT.Rendering','OFT.Attributes','OFT.Core','OFT.Platform.Core'
+          foreach ($dll in $dlls) {
+            Invoke-WebRequest -Uri "$base/$dll.dll" -OutFile (Join-Path $libs "$dll.dll")
+            Write-Host ("  {0,-22} {1,9:N0} bytes" -f "$dll.dll", (Get-Item (Join-Path $libs "$dll.dll")).Length)
+          }
+
+          # ATAS X is Avalonia-based; Dispatcher/DispatcherTimer come from here.
+          $index = Invoke-RestMethod 'https://api.nuget.org/v3-flatcontainer/avalonia.base/index.json'
+          $version = $index.versions |
+            Where-Object { $_ -like '11.*' -and $_ -notmatch '-' } |
+            Sort-Object { [version]$_ } |
+            Select-Object -Last 1
+          Write-Host "Avalonia.Base version: $version"
+
+          $nupkg = Join-Path $env:RUNNER_TEMP 'avalonia.base.zip'
+          Invoke-WebRequest -Uri "https://api.nuget.org/v3-flatcontainer/avalonia.base/$version/avalonia.base.$version.nupkg" -OutFile $nupkg
+          $extract = Join-Path $env:RUNNER_TEMP 'avalonia.base'
+          Expand-Archive -Path $nupkg -DestinationPath $extract -Force
+
+          $dll = Get-ChildItem -Path (Join-Path $extract 'lib') -Filter 'Avalonia.Base.dll' -Recurse |
+            Sort-Object { $_.FullName } | Select-Object -Last 1
+          if (-not $dll) { throw 'Avalonia.Base.dll not found in the NuGet package' }
+          Copy-Item $dll.FullName (Join-Path $libs 'Avalonia.Base.dll')
+          Write-Host ("  Avalonia.Base.dll      {0,9:N0} bytes from {1}" -f $dll.Length, $dll.FullName)
+
+      - name: Build
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $atasDir = Join-Path $env:GITHUB_WORKSPACE 'libs'
+          dotnet build gex-walls/src/GexWalls/GexWalls.csproj `
+            -c Release `
+            -p:AtasDir="$atasDir" `
+            -p:TreatWarningsAsErrors=false
+          if ($LASTEXITCODE -ne 0) { throw "dotnet build failed ($LASTEXITCODE)" }
+
+          $dll = 'gex-walls/src/GexWalls/bin/Release/GexWalls.dll'
+          if (-not (Test-Path $dll)) { throw "expected output missing: $dll" }
+          Write-Host ("Built {0} ({1:N0} bytes)" -f $dll, (Get-Item $dll).Length)
+
+      - name: Smoke-test the assembly
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dll = Resolve-Path 'gex-walls/src/GexWalls/bin/Release/GexWalls.dll'
+          $bytes = [System.IO.File]::ReadAllBytes($dll)
+          $text = [System.Text.Encoding]::Latin1.GetString($bytes)
+
+          # The indicator must be discoverable by ATAS and must not have picked up
+          # a private copy of the platform assemblies (Private=false in the csproj).
+          'GexWallsIndicator','GEX / IV Walls (CBOE)','zero_gamma','ValueDataSeries','RedrawChart' | ForEach-Object {
+            if ($text -notmatch [regex]::Escape($_)) { throw "assembly is missing expected symbol: $_" }
+            Write-Host "  found: $_"
+          }
+          if ($text -match 'InvalidOperationException') { Write-Host '  (note: InvalidOperationException string present)' }
+
+          $strays = Get-ChildItem 'gex-walls/src/GexWalls/bin/Release' -Filter '*.dll' |
+            Where-Object { $_.Name -ne 'GexWalls.dll' }
+          if ($strays) { Write-Host "WARNING - extra assemblies in the output folder: $($strays.Name -join ', ')" }
+          else { Write-Host '  output folder contains GexWalls.dll only' }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GexWalls-indicator
+          path: gex-walls/src/GexWalls/bin/Release/GexWalls.dll
+          if-no-files-found: error
+
+      - name: Publish release asset
+        if: github.ref == 'refs/heads/arena/6365b04e-ss' || github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = $env:RELEASE_TAG
+          gh release view $tag 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag `
+              --target $env:GITHUB_SHA `
+              --title 'GEX / IV Walls indicator for ATAS' `
+              --notes @'
+Drop-in ATAS custom indicator built from `gex-walls/` by CI.
+
+What it does: pulls CBOE's free delayed option chain, computes dealer gamma
+walls, the zero-gamma flip, IV walls, max pain and the expected-move band, and
+draws them on the price chart - refreshed on a timer, with the previous value
+kept on the bars where it was in force.
+
+Install: copy `GexWalls.dll` into `%APPDATA%\ATAS X\Indicators\`, reload custom
+indicators in ATAS, then add **GEX / IV Walls (CBOE)** from the Custom group.
+
+Built against the ATAS reference assemblies pinned in the workflow; if ATAS
+rejects it, rebuild locally with your own install folder:
+
+    dotnet build -c Release -p:AtasDir="C:\Program Files\ATAS X"
+
+Logs and cached levels: `%APPDATA%\ATAS X\GexWalls\`.
+'@
+            if ($LASTEXITCODE -ne 0) { throw "gh release create failed ($LASTEXITCODE)" }
+          }
+          gh release upload $tag 'gex-walls/src/GexWalls/bin/Release/GexWalls.dll' --clobber
+          if ($LASTEXITCODE -ne 0) { throw "gh release upload failed ($LASTEXITCODE)" }
+          Write-Host 'release asset published'

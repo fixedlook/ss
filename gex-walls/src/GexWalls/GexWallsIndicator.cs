@@ -4,7 +4,7 @@ using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Windows.Media;
+using System.Drawing;
 
 using ATAS.Indicators;
 using Avalonia.Threading;
@@ -96,7 +96,6 @@ namespace GexWalls
         private string _sourceUsed = "";
         private ChainSnapshot _lastChain;
         private bool _recomputePending;
-        private bool _wasLoading;
 
         private Color _zeroGammaColor = Colors.Gold;
         private Color _callWallColor = Colors.LimeGreen;
@@ -192,7 +191,7 @@ namespace GexWalls
                         break;
                 }
 
-                slot.Series.Color = color.Convert();
+                slot.Series.Color = color;
             }
         }
 
@@ -484,20 +483,6 @@ namespace GexWalls
             if (bar > _barCount)
                 _barCount = bar;
 
-            if (IsLoading)
-            {
-                // Bars calculated while the platform is still loading history are
-                // repainted in full once the load finishes.
-                _wasLoading = true;
-                return;
-            }
-
-            if (_wasLoading)
-            {
-                _wasLoading = false;
-                RedrawAllBars();
-            }
-
             if (_recomputePending)
                 RecomputeLocally();
 
@@ -630,7 +615,7 @@ namespace GexWalls
 
         private void MaybeRequestFetch()
         {
-            if (IsLoading || _fetching)
+            if (_fetching)
                 return;
 
             // Called on every tick of the forming bar, so bail out on the
