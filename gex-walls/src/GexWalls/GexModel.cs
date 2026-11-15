@@ -56,6 +56,23 @@ namespace GexWalls
         /// expiry look empty. When true, volume is used as OI for 0DTE contracts.
         /// </summary>
         public bool VolumeProxyForToday;
+
+        /// <summary>
+        /// How far either side of spot the gamma-flip scan looks, in percent.
+        /// The flip is where re-priced net gamma changes sign; a flip further out
+        /// than this is noise from the wings, not a tradeable level.
+        /// </summary>
+        public decimal GammaFlipBandPct = 12m;
+
+        /// <summary>Grid resolution of that scan (80 gives 0.3% steps at a 12% band).</summary>
+        public int GammaFlipSteps = 80;
+
+        /// <summary>
+        /// A strike needs at least this share of the largest per-strike open
+        /// interest to be eligible as an IV wall, so a single lot in the far wing
+        /// cannot win on implied vol alone.
+        /// </summary>
+        public decimal IvWallMinOiFraction = 0.02m;
     }
 
     /// <summary>Result of the aggregation: the levels the indicator draws.</summary>
@@ -78,9 +95,67 @@ namespace GexWalls
         public decimal? PutCallOiRatio;
         public int ContractsUsed;
 
+        /// <summary>Everything needed to explain - or dispute - the numbers above.</summary>
+        public ChainAudit Audit;
+
         public bool HasAnyLevel =>
             ZeroGamma.HasValue || CallWall1.HasValue || PutWall1.HasValue ||
             IvWall1.HasValue || MaxPain.HasValue;
+    }
+
+    /// <summary>
+    /// Provenance for one computation: how many contracts were seen, how many
+    /// survived each filter, which expiries contributed, and the per-strike table
+    /// the levels were read off. Written to audit_&lt;source&gt;.json so a level can
+    /// be compared strike-for-strike against another feed.
+    /// </summary>
+    public sealed class ChainAudit
+    {
+        public string Source = "";
+        public decimal Spot;
+        public int ContractsTotal;
+        public int ContractsUsed;
+        public int ExcludedExpired;
+        public int ExcludedInvalidStrike;
+        public int ExcludedDte;
+        public int ExcludedStrike;
+        public int ExcludedNoOiOrGamma;
+        public int ExcludedNoIv;
+        public string IvUnits = "";
+        public DateTime? NearestExpiry;
+
+        public List<ExpiryAudit> Expiries = new();
+        public List<StrikeAudit> Strikes = new();
+
+        // gamma flip scan
+        public decimal? FlipValue;
+        public decimal FlipBandLow;
+        public decimal FlipBandHigh;
+        public int FlipGridPoints;
+        public int FlipCrossings;
+        public string FlipNote = "";
+        public decimal BsGexAtSpot;
+        public decimal ChainGexAtSpot;
+
+        /// <summary>Crossings of the cumulative-by-strike series, kept only to show why that proxy is wrong.</summary>
+        public List<decimal> ChainCrossings = new();
+    }
+
+    public sealed class ExpiryAudit
+    {
+        public DateTime Expiry;
+        public int Dte;
+        public int Contracts;
+        public decimal OpenInterest;
+        public decimal Gex;
+    }
+
+    public sealed class StrikeAudit
+    {
+        public decimal Strike;
+        public decimal CallOi, PutOi;
+        public decimal CallGex, PutGex, Net, Cumulative;
+        public decimal MeanIv;
     }
 
     /// <summary>How a level expressed in the option underlying's price is moved onto the chart.</summary>

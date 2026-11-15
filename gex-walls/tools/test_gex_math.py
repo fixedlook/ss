@@ -126,8 +126,13 @@ def main():
     ok &= check("call wall 2 = 29900", lv["call_wall_2"] == 29900.0, str(lv["call_wall_2"]))
     ok &= check("put wall 1 = 29600", lv["put_wall_1"] == 29600.0, str(lv["put_wall_1"]))
     ok &= check("put wall 2 = 29700", lv["put_wall_2"] == 29700.0, str(lv["put_wall_2"]))
-    ok &= check("iv wall 1 = 29600", lv["iv_wall_1"] == 29600.0, str(lv["iv_wall_1"]))
-    ok &= check("iv wall 2 = 30000", lv["iv_wall_2"] == 30000.0, str(lv["iv_wall_2"]))
+    # IV walls rank the open-interest weighted MEAN iv per strike. Ranking by
+    # sum(iv * OI) just re-ranks open interest and returns the put wall again -
+    # that is the bug this pair guards.
+    ok &= check("iv wall 1 = 30100 (vol peak)", lv["iv_wall_1"] == 30100.0, str(lv["iv_wall_1"]))
+    ok &= check("iv wall 2 = 29600", lv["iv_wall_2"] == 29600.0, str(lv["iv_wall_2"]))
+    ok &= check("iv wall is not a copy of the put wall", lv["iv_wall_1"] != lv["put_wall_1"],
+                "{} vs {}".format(lv["iv_wall_1"], lv["put_wall_1"]))
 
     # max pain: calls piled at 30000, puts at 29600 -> payout is flat in
     # between, so the tie must resolve to the strike nearest spot.
@@ -138,29 +143,20 @@ def main():
     # The distant expiry (99k OI) and the 45000 strike must not be counted.
     ok &= check("dte + distance filters applied", res["contracts_used"] == 18, str(res["contracts_used"]))
 
-    # zero gamma must sit where cumulative net gamma actually crosses zero
-    strikes = sorted({c["strike"] for c in contracts
-                      if 0 <= (c["expiry"] - TODAY).days <= 45 and abs(c["strike"] - SPOT) <= SPOT * 0.2})
-    call_gex, put_gex = {}, {}
-    for c in contracts:
-        dte = (c["expiry"] - TODAY).days
-        if dte < 0 or dte > 45 or abs(c["strike"] - SPOT) > SPOT * 0.2:
-            continue
-        gex = c["gamma"] * c["oi"] * 100 * SPOT * SPOT * 0.01
-        (call_gex if c["is_call"] else put_gex).setdefault(c["strike"], 0.0)
-        (call_gex if c["is_call"] else put_gex)[c["strike"]] += gex
-    cum, crossings = 0.0, []
-    prev = None
-    for k in strikes:
-        before = cum
-        cum += call_gex.get(k, 0.0) - put_gex.get(k, 0.0)
-        if prev is not None and ((before < 0 <= cum) or (before > 0 >= cum)):
-            crossings.append((prev, k, before, cum))
-        prev = k
+    # Zero gamma is the price where re-priced net gamma changes sign, and it has
+    # to land inside the scan band. The old cumulative-by-strike proxy drifted
+    # into the wings - it answered -20% from spot for a real SPX chain.
     z = lv["zero_gamma"]
-    inside = any(lo - 0.01 <= z <= hi + 0.01 for lo, hi, _, _ in crossings)
-    ok &= check("zero gamma inside a real sign change", inside,
-                "z={} crossings={}".format(z, [(a, b) for a, b, _, _ in crossings]))
+    flip = res["gamma_flip"]
+    ok &= check("zero gamma inside the flip band",
+                z is not None and abs(z - SPOT) < SPOT * 0.12, str(z))
+    ok &= check("zero gamma near the re-priced sign change (~29545.49)",
+                z is not None and abs(z - 29545.49) < 3.0, str(z))
+    ok &= check("flip scan found exactly one crossing", flip["crossings"] == 1, str(flip["crossings"]))
+    ok &= check("flip band brackets spot",
+                flip["band"][0] < SPOT < flip["band"][1], str(flip["band"]))
+    ok &= check("iv units detected as fractions", flip["iv_units"] == "fraction", flip["iv_units"])
+
     ok &= check("total gex positive with the big call wall", res["total_gex"] > 0, str(res["total_gex"]))
     ok &= check("put/call OI ratio computed", res["put_call_oi_ratio"] not in (None, 0.0),
                 str(res["put_call_oi_ratio"]))
@@ -179,6 +175,36 @@ def main():
     proxy = g.compute(contracts, spot, max_dte=45, vol_proxy_today=True, today=TODAY)
     ok &= check("volume proxy is a no-op when volume is 0",
                 proxy["levels"]["call_wall_1"] == 30000.0)
+
+    # --- maths primitives -------------------------------------------------
+    # S=K=100, T=1, vol=0.2 -> d1 = 0.1, pdf = 0.396953, gamma = pdf / 20
+    atm = g.bs_gamma(100.0, 100.0, 1.0, 0.2)
+    ok &= check("black-scholes gamma matches the closed form", approx(atm, 0.0198477, 1e-6), str(atm))
+
+    ok &= check("gamma is safe at zero everything",
+                g.bs_gamma(0.0, 100.0, 1.0, 0.2) == 0.0
+                and g.bs_gamma(100.0, 100.0, 0.0, 0.2) == 0.0
+                and g.bs_gamma(100.0, 100.0, 1.0, 0.0) == 0.0)
+
+    # A one-sided book never crosses zero, so there is no flip to draw.
+    calls_only = [(100.0, 0.1, 0.2, 500.0, 1.0)]
+    value, crossings, _, _, _ = g.zero_gamma_flip(calls_only, 100.0, 100.0)
+    ok &= check("no flip when the book is one-sided", value is None and crossings == 0, str(value))
+
+    puts_only = [(100.0, 0.1, 0.2, 500.0, -1.0)]
+    value, _, _, _, _ = g.zero_gamma_flip(puts_only, 100.0, 100.0)
+    ok &= check("no flip when the book is all puts", value is None, str(value))
+
+    # A call/put straddle of equal size is gamma-neutral at the money.
+    straddle = [(90.0, 0.08, 0.25, 400.0, 1.0), (110.0, 0.08, 0.25, 400.0, -1.0)]
+    value, _, _, _, _ = g.zero_gamma_flip(straddle, 100.0, 100.0)
+    ok &= check("a call/put straddle flips at the money",
+                value is not None and abs(value - 100.0) < 1.5, str(value))
+
+    ok &= check("percent-quoted iv is detected",
+                g.iv_scale_of([{"iv": 15.2}, {"iv": 18.5}]) == 0.01)
+    ok &= check("fraction-quoted iv is left alone",
+                g.iv_scale_of([{"iv": 0.152}, {"iv": 0.185}]) == 1.0)
 
     # degenerate input must not raise
     empty = g.compute([], 0.0, today=TODAY)

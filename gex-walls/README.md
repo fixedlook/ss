@@ -35,8 +35,9 @@ get: the same underlying data the paid vendors start from, locally, for nothing.
 | `.github/workflows/build-gex-walls.yml` | Fetches ATAS reference assemblies, tests, builds, smoke-tests, publishes the DLL |
 
 The Python version is the reference implementation: `test_gex_math.py` covers it
-(26 checks), and `GexMath.cs` is a straight port. Change a formula in one, change
-it in the other.
+(38 checks, including a closed-form Black-Scholes gamma value and the two
+regressions above), and `GexMath.cs` is a straight port. Change a formula in one,
+change it in the other.
 
 ---
 
@@ -46,10 +47,10 @@ All levels come from the same chain and are recomputed together:
 
 | Level | Definition |
 | --- | --- |
-| **Zero-gamma flip** | Strike where cumulative net dealer gamma changes sign, linearly interpolated between strikes. Above it dealers dampen moves; below it they amplify them. |
+| **Zero-gamma flip** | The **price** where the book's gamma dollars cancel: every contract is re-priced with Black-Scholes gamma at each candidate spot and the net is scanned for a sign change inside ±12% of spot. Above it dealers dampen moves; below it they amplify them. Note this is *not* the cumulative-by-strike crossing — that proxy drifts into the wings and answered −20% from spot on a real SPX chain. |
 | **Call walls (2)** | The two strikes with the largest call gamma × OI **at or above spot** — resistance / pinning. |
 | **Put walls (2)** | The two strikes with the largest put gamma × OI **at or below spot** — support / acceleration. |
-| **IV walls (2)** | The two strikes carrying the largest `IV × OI` mass, i.e. where the most implied vol is being paid. These are not support/resistance; they mark where a vol repricing matters most. |
+| **IV walls (2)** | The two strikes with the highest **open-interest weighted mean IV**, among strikes holding at least 2% of the largest per-strike OI. These are not support/resistance; they mark where a vol repricing matters most. Ranking by `IV × OI` instead just re-ranks open interest and returns the put wall a second time. |
 | **Max pain** | Nearest-expiry strike with the smallest total option payout. Off by default. |
 | **Expected move** | Nearest-expiry ATM straddle mid, drawn as a band around spot. Off by default. |
 
@@ -102,14 +103,16 @@ Anything else falls back to the manual source symbol.
 Built by CI on every push that touches `gex-walls/`, and published as a release
 asset:
 
-**[GexWalls.dll — release gex-walls-v0.1.1](https://github.com/fixedlook/ss/releases/download/gex-walls-v0.1.1/GexWalls.dll)**
+**[GexWalls.dll — release gex-walls-v0.1.3](https://github.com/fixedlook/ss/releases/download/gex-walls-v0.1.3/GexWalls.dll)**
 
 - size: 42,496 bytes
 - sha256: shown next to the asset on the release page (every rebuild produces
   new bytes, so the digest lives with the build rather than in this file)
 
-Earlier build, kept for reference: [gex-walls-v0.1.0](https://github.com/fixedlook/ss/releases/tag/gex-walls-v0.1.0) —
-note it has the settings-revert bug fixed in v0.1.1.
+Earlier builds, kept for reference: [v0.1.2](https://github.com/fixedlook/ss/releases/tag/gex-walls-v0.1.2)
+(draws nothing rather than raw strikes when the mapping has no anchor),
+[v0.1.1](https://github.com/fixedlook/ss/releases/tag/gex-walls-v0.1.1) (settings
+revert), [v0.1.0](https://github.com/fixedlook/ss/releases/tag/gex-walls-v0.1.0).
 
 Install: copy it into `%APPDATA%\ATAS X\Indicators\` (classic ATAS:
 `%APPDATA%\ATAS\Indicators\`), reload custom indicators in ATAS, then add
@@ -162,6 +165,7 @@ Nothing else. JSON parsing is `System.Text.Json` from the BCL, HTTP is
 | Refresh interval | 120 s | CBOE data is 15 min delayed; faster polls buy nothing |
 | Min / Max days to expiry | 0 / 45 | gamma-relevant slice |
 | Max strike distance | 20 % | drop far-OTM strikes |
+| Gamma flip search band | 12 % | how far either side of spot the flip scan looks |
 | Volume as OI for 0DTE | off | stale-OI workaround for today's expiry |
 | Price mapping | Auto | see the table above |
 | Show zero-gamma / call walls / put walls / IV walls | on | per-group visibility |
@@ -174,7 +178,11 @@ bar" — that is how a line ends when a wall disappears.
 
 The last computed snapshot is cached to
 `%APPDATA%\ATAS X\GexWalls\levels_<source>.json`, so a restart or an ATAS
-reload shows the previous levels instead of an empty chart. Fetch problems are
+reload shows the previous levels instead of an empty chart. The full working is
+written next to it as `audit_<source>.json`: the filter counts, the per-expiry
+open-interest mix, the gamma-flip grid, and the per-strike table (strike, call
+and put OI, call and put GEX, cumulative, mean IV) the levels were read off. That
+is the file to send someone who says a level is wrong. Fetch problems are
 logged to `%APPDATA%\ATAS X\GexWalls\log.txt`. If the chart is empty, read that
 file first — a 404 means the symbol is wrong, and a timeout means your network
 is blocking `cdn.cboe.com`.
@@ -190,6 +198,16 @@ python3 gex_levels.py --symbol _NDX      # live numbers, printed as a table
 python3 gex_levels.py --symbol QQQ --normalize-spot 29800
 python3 gex_levels.py --symbol _SPX --watch 300 --write-cache
 ```
+
+Two things worth knowing when comparing against a paid feed:
+
+- **Expiry window.** The walls here aggregate 0–45 DTE by default. Set
+  `Max days to expiry` to 0 or 1 for 0DTE walls, which is what most intraday
+  vendors quote; the strikes will move when you do.
+- **Index chain, futures chart.** `_NDX` is the index book while your chart is
+  NQ/MNQ, so every level is shifted by the basis (`AlignToChart`). A vendor
+  computing on NQ futures options OI is reading a different, smaller book — expect
+  different walls, not a rounding difference.
 
 `--write-cache` writes exactly the file the indicator reads in `LocalJsonFile`
 mode, so the Python tool can be the data engine and ATAS just the renderer. That

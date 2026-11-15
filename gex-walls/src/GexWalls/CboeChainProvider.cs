@@ -32,6 +32,23 @@ namespace GexWalls
         private static readonly Dictionary<string, CacheEntry> Cache =
             new Dictionary<string, CacheEntry>(StringComparer.OrdinalIgnoreCase);
 
+        /// <summary>Last download error per source, so the log can say why a level froze.</summary>
+        private static readonly Dictionary<string, string> Errors =
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        public static string UrlFor(string source)
+        {
+            return BaseUrl + Uri.EscapeDataString((source ?? "").Trim()) + ".json";
+        }
+
+        public static string LastErrorFor(string source)
+        {
+            lock (Cache)
+            {
+                return (source != null && Errors.TryGetValue(source.Trim(), out var error)) ? error : "";
+            }
+        }
+
         private sealed class CacheEntry
         {
             public ChainSnapshot Chain;
@@ -77,15 +94,36 @@ namespace GexWalls
                 if (TryGetFresh(source, minInterval, out fresh))
                     return fresh;
 
-                var url = BaseUrl + Uri.EscapeDataString(source) + ".json";
-                var json = await Http.GetStringAsync(url, token).ConfigureAwait(false);
+                var url = UrlFor(source);
+                string json;
+
+                using (var response = await Http.GetAsync(url, HttpCompletionOption.ResponseContentRead, token)
+                    .ConfigureAwait(false))
+                {
+                    json = await response.Content.ReadAsStringAsync(token).ConfigureAwait(false);
+
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        var snippet = (json ?? "").Trim();
+                        if (snippet.Length > 160)
+                            snippet = snippet.Substring(0, 160) + "...";
+
+                        throw new HttpRequestException(
+                            "HTTP " + (int)response.StatusCode + " " + response.ReasonPhrase +
+                            (snippet.Length == 0 ? "" : " - " + snippet));
+                    }
+                }
 
                 var chain = Parse(json, source);
                 if (chain == null || chain.Contracts.Count == 0)
-                    throw new InvalidOperationException("chain parsed empty");
+                    throw new InvalidOperationException(
+                        "chain parsed empty (" + (json ?? "").Length + " bytes) - the payload had no usable options array");
 
                 lock (Cache)
+                {
                     Cache[source] = new CacheEntry { Chain = chain, FetchedUtc = DateTime.UtcNow };
+                    Errors.Remove(source);
+                }
 
                 return chain;
             }
@@ -93,6 +131,8 @@ namespace GexWalls
             {
                 lock (Cache)
                 {
+                    Errors[source] = ex.GetType().Name + ": " + ex.Message;
+
                     if (Cache.TryGetValue(source, out var cached) && cached.Chain != null)
                     {
                         cached.Error = ex.Message;

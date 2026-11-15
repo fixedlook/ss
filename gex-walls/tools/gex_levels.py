@@ -29,6 +29,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import math
 from datetime import datetime, timezone
 
 CBOE_URL = "https://cdn.cboe.com/api/global/delayed_quotes/options/{symbol}.json"
@@ -104,6 +105,67 @@ def parse_chain(payload, source=""):
     return spot, iv30, contracts
 
 
+def iv_scale_of(contracts):
+    """0.01 when the chain quotes iv in percent points (18.5), else 1.
+
+    Median based, so a couple of junk rows cannot flip the whole chain.
+    """
+    values = sorted(c["iv"] for c in contracts if c.get("iv", 0) > 0)
+    if not values:
+        return 1.0
+    return 0.01 if values[len(values) // 2] > 1.0 else 1.0
+
+
+def bs_gamma(spot, strike, years, vol):
+    """Black-Scholes gamma, r = 0. Vol is a fraction (0.15 = 15%)."""
+    if spot <= 0 or strike <= 0 or years <= 0 or vol <= 0:
+        return 0.0
+    denom = vol * math.sqrt(years)
+    if denom <= 0:
+        return 0.0
+    d1 = (math.log(spot / strike) + 0.5 * vol * vol * years) / denom
+    return math.exp(-0.5 * d1 * d1) / math.sqrt(2 * math.pi) / (spot * denom)
+
+
+def zero_gamma_flip(rows, spot, multiplier, band_pct=12.0, steps=80):
+    """The price where net gamma dollars cancel, by re-pricing every contract.
+
+    `rows` are (strike, years, vol_fraction, oi, sign) with sign +1 for calls
+    and -1 for puts. Returns (value, crossings, gex_at_spot, band_low, band_high).
+
+    This is not the cumulative-by-strike crossing: that proxy drifts into the
+    wings and answered -20% from spot for SPX.
+    """
+    low = spot * (1 - band_pct / 100.0)
+    high = spot * (1 + band_pct / 100.0)
+    step = (high - low) / steps
+
+    def net_gex(candidate):
+        total = 0.0
+        for strike, years, vol, oi, sign in rows:
+            g = bs_gamma(candidate, strike, years, vol)
+            if g > 0:
+                total += sign * g * oi * multiplier * candidate * candidate * 0.01
+        return total
+
+    crossings = []
+    prev_gex = None
+    prev_spot = None
+    best = None
+    for i in range(steps + 1):
+        candidate = low + step * i
+        gex = net_gex(candidate)
+        if prev_gex is not None and prev_gex != gex:
+            if (prev_gex < 0 <= gex) or (prev_gex > 0 >= gex):
+                crossing = prev_spot + (candidate - prev_spot) * (-prev_gex) / (gex - prev_gex)
+                crossings.append(crossing)
+        prev_gex, prev_spot = gex, candidate
+
+    if crossings:
+        best = min(crossings, key=lambda x: abs(x - spot))
+    return best, len(crossings), net_gex(spot), low, high
+
+
 def _wall(strikes_to_values, take):
     """Highest `take` strikes by value, descending."""
     ranked = sorted(strikes_to_values.items(), key=lambda kv: (-kv[1], kv[0]))
@@ -112,7 +174,8 @@ def _wall(strikes_to_values, take):
 
 def compute(contracts, spot, min_dte=0, max_dte=45, max_dist_pct=20.0,
             multiplier=CONTRACT_MULTIPLIER, vol_proxy_today=False,
-            nearest_expiry_max_dte=10, today=None):
+            nearest_expiry_max_dte=10, today=None, flip_band_pct=12.0,
+            iv_wall_min_oi_fraction=0.02):
     """
     Aggregate the chain into the level set the indicator draws.
 
@@ -147,10 +210,13 @@ def compute(contracts, spot, min_dte=0, max_dte=45, max_dist_pct=20.0,
     lo = spot * (1 - max_dist_pct / 100.0) if max_dist_pct > 0 else 0.0
     hi = spot * (1 + max_dist_pct / 100.0) if max_dist_pct > 0 else float("inf")
 
-    call_gex, put_gex, iv_oi = {}, {}, {}
+    call_gex, put_gex = {}, {}
+    iv_oi, iv_weighted = {}, {}
     call_oi = put_oi = 0.0
     used = 0
     expiries = {}
+    flip_rows = []
+    iv_scale = iv_scale_of(contracts)
 
     for c in contracts:
         dte = (c["expiry"] - today).days
@@ -177,8 +243,11 @@ def compute(contracts, spot, min_dte=0, max_dte=45, max_dist_pct=20.0,
         else:
             put_gex[c["strike"]] = put_gex.get(c["strike"], 0.0) + gex
             put_oi += oi
-        if c["iv"] > 0:
-            iv_oi[c["strike"]] = iv_oi.get(c["strike"], 0.0) + c["iv"] * oi
+        iv = c["iv"] * iv_scale
+        if iv > 0:
+            iv_oi[c["strike"]] = iv_oi.get(c["strike"], 0.0) + oi
+            iv_weighted[c["strike"]] = iv_weighted.get(c["strike"], 0.0) + iv * oi
+            flip_rows.append((c["strike"], max(dte, 0.5) / 365.0, iv, oi, 1.0 if c["is_call"] else -1.0))
 
     out["contracts_used"] = used
     if call_oi + put_oi > 0:
@@ -199,7 +268,17 @@ def compute(contracts, spot, min_dte=0, max_dte=45, max_dist_pct=20.0,
     levels["call_wall_1"], levels["call_wall_2"] = calls[0], calls[1]
     levels["put_wall_1"], levels["put_wall_2"] = puts[0], puts[1]
 
-    ivs = _wall(iv_oi, 2)
+    # IV walls: the vol peak among liquid strikes, not sum(iv * OI) - that just
+    # re-ranks open interest and returns the put wall a second time.
+    iv_peaks = {}
+    if iv_oi:
+        floor = max(iv_oi.values()) * iv_wall_min_oi_fraction
+        for strike, contracts_oi in iv_oi.items():
+            if contracts_oi <= 0 or contracts_oi < floor:
+                continue
+            iv_peaks[strike] = iv_weighted[strike] / contracts_oi
+
+    ivs = _wall(iv_peaks, 2)
     while len(ivs) < 2:
         ivs.append(None)
     levels["iv_wall_1"], levels["iv_wall_2"] = ivs[0], ivs[1]
@@ -209,28 +288,17 @@ def compute(contracts, spot, min_dte=0, max_dte=45, max_dist_pct=20.0,
     net = [call_gex.get(k, 0.0) - put_gex.get(k, 0.0) for k in strikes]
     out["total_gex"] = round(sum(net), 2)
 
-    zero = None
-    crossings = []
-    cum = 0.0
-    prev_cum = None
-    prev_strike = None
-    weakest_strike, weakest = None, None
-    for k, n in zip(strikes, net):
-        cum += n
-        if weakest is None or abs(cum) < weakest:
-            weakest, weakest_strike = abs(cum), k
-        if prev_cum is not None and prev_cum != cum:
-            # cumulative dealer gamma changes sign between these two strikes
-            if (prev_cum < 0 <= cum) or (prev_cum > 0 >= cum):
-                crossings.append(prev_strike + (k - prev_strike) * (-prev_cum) / (cum - prev_cum))
-        prev_cum, prev_strike = cum, k
-
-    if crossings:
-        zero = min(crossings, key=lambda x: abs(x - spot))
-    elif strikes:
-        # No sign change in the window: the flat-gamma pocket is the best proxy.
-        zero = weakest_strike
+    zero, flip_crossings, gex_at_spot, band_low, band_high = zero_gamma_flip(
+        flip_rows, spot, multiplier, band_pct=flip_band_pct)
     levels["zero_gamma"] = round(zero, 2) if zero is not None else None
+    out["gamma_flip"] = {
+        "value": round(zero, 2) if zero is not None else None,
+        "crossings": flip_crossings,
+        "band": [round(band_low, 2), round(band_high, 2)],
+        "gex_at_spot_blackscholes": round(gex_at_spot, 2),
+        "gex_at_spot_chain_gamma": out["total_gex"],
+        "iv_units": "percent" if iv_scale < 1 else "fraction",
+    }
 
     # --- max pain / expected move on the nearest expiry -------------------
     if expiries:

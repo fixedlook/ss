@@ -95,6 +95,131 @@ namespace GexWalls
             }
         }
 
+        /// <summary>
+        /// Writes audit_&lt;source&gt;.json: the filter counts, the expiry breakdown
+        /// and the full per-strike table behind the levels. This is the file to
+        /// send someone when they say a level is wrong - every number the
+        /// indicator used is in it.
+        /// </summary>
+        public static void SaveAudit(LevelsSnapshot snapshot, LevelOptions options)
+        {
+            var audit = snapshot?.Audit;
+            if (audit == null)
+                return;
+
+            try
+            {
+                var strikes = new JsonArray();
+                foreach (var row in audit.Strikes)
+                {
+                    strikes.Add(new JsonObject
+                    {
+                        ["strike"] = row.Strike,
+                        ["call_oi"] = row.CallOi,
+                        ["put_oi"] = row.PutOi,
+                        ["call_gex"] = Math.Round(row.CallGex, 2),
+                        ["put_gex"] = Math.Round(row.PutGex, 2),
+                        ["net_gex"] = Math.Round(row.Net, 2),
+                        ["cum_gex"] = Math.Round(row.Cumulative, 2),
+                        ["mean_iv"] = Math.Round(row.MeanIv * 100m, 2)
+                    });
+                }
+
+                var expiries = new JsonArray();
+                foreach (var row in audit.Expiries)
+                {
+                    expiries.Add(new JsonObject
+                    {
+                        ["expiry"] = row.Expiry.ToString("yyyy-MM-dd"),
+                        ["dte"] = row.Dte,
+                        ["contracts"] = row.Contracts,
+                        ["open_interest"] = row.OpenInterest,
+                        ["gex"] = Math.Round(row.Gex, 2)
+                    });
+                }
+
+                var crossings = new JsonArray();
+                foreach (var crossing in audit.ChainCrossings)
+                    crossings.Add(JsonValue.Create(Math.Round(crossing, 2)));
+
+                var root = new JsonObject
+                {
+                    ["source"] = audit.Source,
+                    ["spot"] = audit.Spot,
+                    ["generated_utc"] = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"),
+                    ["data_updated_utc"] = snapshot.UpdatedUtc.ToString("yyyy-MM-ddTHH:mm:ssZ"),
+                    ["settings"] = new JsonObject
+                    {
+                        ["min_dte"] = options?.MinDte ?? 0,
+                        ["max_dte"] = options?.MaxDte ?? 0,
+                        ["max_strike_distance_pct"] = options?.MaxStrikeDistancePct ?? 0m,
+                        ["volume_proxy_for_today"] = options?.VolumeProxyForToday ?? false,
+                        ["gamma_flip_band_pct"] = options?.GammaFlipBandPct ?? 0m,
+                        ["iv_wall_min_oi_fraction"] = options?.IvWallMinOiFraction ?? 0m
+                    },
+                    ["counts"] = new JsonObject
+                    {
+                        ["contracts_total"] = audit.ContractsTotal,
+                        ["used"] = audit.ContractsUsed,
+                        ["excluded_expired"] = audit.ExcludedExpired,
+                        ["excluded_invalid_strike"] = audit.ExcludedInvalidStrike,
+                        ["excluded_dte"] = audit.ExcludedDte,
+                        ["excluded_strike_distance"] = audit.ExcludedStrike,
+                        ["excluded_no_oi_or_gamma"] = audit.ExcludedNoOiOrGamma,
+                        ["excluded_no_iv"] = audit.ExcludedNoIv
+                    },
+                    ["iv_units"] = audit.IvUnits,
+                    ["gamma_flip"] = new JsonObject
+                    {
+                        ["value"] = Number(audit.FlipValue),
+                        ["band_low"] = audit.FlipBandLow,
+                        ["band_high"] = audit.FlipBandHigh,
+                        ["grid_points"] = audit.FlipGridPoints,
+                        ["crossings"] = audit.FlipCrossings,
+                        ["note"] = audit.FlipNote,
+                        ["gex_at_spot_blackscholes"] = Math.Round(audit.BsGexAtSpot, 2),
+                        ["gex_at_spot_chain_gamma"] = Math.Round(audit.ChainGexAtSpot, 2)
+                    },
+                    // The old proxy, kept visible so the two can be compared.
+                    ["cumulative_by_strike_crossings"] = crossings,
+                    ["nearest_expiry"] = audit.NearestExpiry?.ToString("yyyy-MM-dd"),
+                    ["levels"] = new JsonObject
+                    {
+                        ["zero_gamma"] = Number(snapshot.ZeroGamma),
+                        ["call_wall_1"] = Number(snapshot.CallWall1),
+                        ["call_wall_2"] = Number(snapshot.CallWall2),
+                        ["put_wall_1"] = Number(snapshot.PutWall1),
+                        ["put_wall_2"] = Number(snapshot.PutWall2),
+                        ["iv_wall_1"] = Number(snapshot.IvWall1),
+                        ["iv_wall_2"] = Number(snapshot.IvWall2),
+                        ["max_pain"] = Number(snapshot.MaxPain),
+                        ["em_high"] = Number(snapshot.EmHigh),
+                        ["em_low"] = Number(snapshot.EmLow)
+                    },
+                    ["expiries"] = expiries,
+                    ["strikes"] = strikes
+                };
+
+                Directory.CreateDirectory(DataDirectory);
+
+                var path = Path.Combine(DataDirectory, "audit_" + FileNameSource(audit.Source) + ".json");
+                var temp = path + ".tmp";
+                File.WriteAllText(temp, root.ToJsonString());
+                if (File.Exists(path))
+                    File.Delete(path);
+                File.Move(temp, path);
+            }
+            catch
+            {
+                // an audit write must never take the chart down
+            }
+        }
+
+        public static string FileNameSource(string source)
+        {
+            return (source ?? "").Trim().Replace("/", "_").Replace("\\", "_");
+        }
+
         public static LevelsSnapshot Load(string source)
         {
             try

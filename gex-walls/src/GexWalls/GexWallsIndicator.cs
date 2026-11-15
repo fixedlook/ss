@@ -31,13 +31,15 @@ namespace GexWalls
         "free delayed option chain, drawn on the price chart and refreshed while " +
         "the platform runs.\n\n" +
         "Levels:\n" +
-        "  Zero-gamma  - strike where cumulative dealer gamma changes sign. Above it " +
-        "dealers dampen moves, below it they amplify them.\n" +
+        "  Zero-gamma  - the price where the book's gamma dollars cancel out (every " +
+        "contract re-priced at that spot). Above it dealers dampen moves, below it " +
+        "they amplify them.\n" +
         "  Call walls  - the two strikes with the largest call gamma above spot " +
         "(resistance / pinning above).\n" +
         "  Put walls   - the two strikes with the largest put gamma below spot " +
         "(support / acceleration below).\n" +
-        "  IV walls    - the two strikes carrying the largest implied-vol x open-interest " +
+        "  IV walls    - the two most liquid strikes carrying the highest open-interest " +
+        "weighted implied vol " +
         "mass, i.e. where the market is paying the most vol.\n" +
         "  Max pain    - nearest-expiry strike with the smallest total option payout.\n" +
         "  Expected move - nearest-expiry ATM straddle, drawn as a band.\n\n" +
@@ -100,6 +102,8 @@ namespace GexWalls
         private bool _loggedNoSource;
         private string _lastMapLog = "";
         private string _lastBlockedLog = "";
+        private string _lastAuditLog;
+        private string _lastIncompleteSource;
         private string _stepsSource = "";
         private int _stepsVersion;
         private int _lastWrittenBar = -1;
@@ -125,6 +129,7 @@ namespace GexWalls
         private int _minDte;
         private int _maxDte = 45;
         private decimal _maxStrikeDistancePct = 20m;
+        private decimal _gammaFlipBandPct = 12m;
         private bool _volumeProxyForToday;
         private PriceMapping _priceMapping = PriceMapping.Auto;
         private decimal _scaleFactor = 1m;
@@ -322,6 +327,22 @@ namespace GexWalls
                 if (_maxStrikeDistancePct == value)
                     return;
                 _maxStrikeDistancePct = value < 0m ? 0m : value;
+                OnSettingChanged(refetch: false, recompute: true);
+            }
+        }
+
+        [Display(Name = "Gamma flip search band (%)", GroupName = "Data", Order = 16,
+            Description = "How far either side of spot the flip scan looks. The flip is the price where " +
+                          "re-priced net gamma changes sign; a crossing further out than this is wing noise.")]
+        public decimal GammaFlipBandPct
+        {
+            get => _gammaFlipBandPct;
+            set
+            {
+                if (_gammaFlipBandPct == value)
+                    return;
+                // 0 would disable the scan entirely, which reads as a broken level
+                _gammaFlipBandPct = value <= 0m ? 12m : Math.Min(value, 50m);
                 OnSettingChanged(refetch: false, recompute: true);
             }
         }
@@ -686,7 +707,7 @@ namespace GexWalls
             if ((now - _lastRequestUtc).TotalSeconds < Math.Max(30, _refreshSeconds))
                 return;
 
-            var source = ResolveSource();
+            var source = CanonicalSource(ResolveSource());
             if (string.IsNullOrEmpty(source))
             {
                 if (!_loggedNoSource)
@@ -698,11 +719,29 @@ namespace GexWalls
                 return;
             }
 
+            // A half-typed symbol ('_', '_N') only 404s once per keystroke and
+            // buries the real failures. Wait until there is something fetchable.
+            if (source.Length < 3)
+            {
+                if (!string.Equals(source, _lastIncompleteSource, StringComparison.OrdinalIgnoreCase))
+                {
+                    _lastIncompleteSource = source;
+                    Log("source '" + source + "' is incomplete - waiting for a full CBOE symbol");
+                }
+
+                return;
+            }
+
+            _lastIncompleteSource = null;
+
             if (!string.Equals(source, _sourceUsed, StringComparison.OrdinalIgnoreCase))
             {
                 // Do not blank the chart here. The previous levels stay visible
                 // until the new chain's first snapshot arrives, and ApplyLevels
                 // repaints the history at that point.
+                if (!string.IsNullOrEmpty(_sourceUsed))
+                    Log("source changed: " + _sourceUsed + " -> " + source);
+
                 _sourceUsed = source;
             }
 
@@ -730,11 +769,19 @@ namespace GexWalls
 
                     if (chain == null)
                     {
-                        Log("chain unavailable - keeping the previous levels");
+                        var error = CboeChainProvider.LastErrorFor(source);
+                        Log("chain unavailable for " + source + " (" + CboeChainProvider.UrlFor(source) + ")" +
+                            (string.IsNullOrEmpty(error) ? "" : " - " + error) +
+                            " - keeping the previous levels");
                         return;
                     }
 
                     _lastChain = chain;
+
+                    var stale = CboeChainProvider.LastErrorFor(source);
+                    if (!string.IsNullOrEmpty(stale))
+                        Log("latest download failed (" + stale + ") - recomputing from the last good chain");
+
                     snapshot = GexMath.Compute(chain, BuildLevelOptions(), DateTime.UtcNow);
                 }
 
@@ -745,7 +792,12 @@ namespace GexWalls
                 }
 
                 if (_dataSourceMode == DataSourceMode.CboeDelayed)
+                {
                     LocalLevelsFile.Save(snapshot);
+                    LocalLevelsFile.SaveAudit(snapshot, BuildLevelOptions());
+                }
+
+                LogAudit(snapshot);
 
                 if (_disposed)
                     return;
@@ -839,6 +891,7 @@ namespace GexWalls
                 MinDte = _minDte,
                 MaxDte = _maxDte,
                 MaxStrikeDistancePct = _maxStrikeDistancePct,
+                GammaFlipBandPct = _gammaFlipBandPct,
                 VolumeProxyForToday = _volumeProxyForToday
             };
         }
@@ -846,7 +899,7 @@ namespace GexWalls
         private string ResolveSource()
         {
             if (!_autoSource)
-                return (_sourceSymbol ?? "").Trim();
+                return CanonicalSource(_sourceSymbol);
 
             var instrument = "";
             try
@@ -876,8 +929,52 @@ namespace GexWalls
             if (instrument.Contains("GC") || instrument.Contains("MGC"))
                 return "GLD";
 
-            return (_sourceSymbol ?? "").Trim();
+            return CanonicalSource(_sourceSymbol);
         }
+
+        /// <summary>
+        /// The manual field is typed by a human, so NQ, _NQ, mnq and MNQZ26 all
+        /// have to end up at the same CBOE symbol. Unknown values pass through
+        /// untouched - CBOE has plenty of symbols this table does not know.
+        /// </summary>
+        private static string CanonicalSource(string raw)
+        {
+            var text = (raw ?? "").Trim().ToUpperInvariant();
+            if (text.Length == 0)
+                return "";
+
+            if (Aliases.TryGetValue(text, out var direct))
+                return direct;
+
+            // futures-style root: MNQZ26 -> MNQZ -> MNQ
+            var end = 0;
+            while (end < text.Length && char.IsLetter(text[end]))
+                end++;
+
+            if (end > 0)
+            {
+                var letters = text.Substring(0, end);
+                if (Aliases.TryGetValue(letters, out var byRoot))
+                    return byRoot;
+
+                if (letters.Length > 3 &&
+                    Aliases.TryGetValue(letters.Substring(0, letters.Length - 1), out var byMonth))
+                    return byMonth;
+            }
+
+            return text;
+        }
+
+        private static readonly Dictionary<string, string> Aliases =
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                { "NQ", "_NDX" }, { "MNQ", "_NDX" }, { "_NQ", "_NDX" }, { "NDX", "_NDX" }, { "_NDX", "_NDX" },
+                { "ES", "_SPX" }, { "MES", "_SPX" }, { "_ES", "_SPX" }, { "SPX", "_SPX" }, { "SPXW", "_SPX" }, { "_SPX", "_SPX" },
+                { "RTY", "_RUT" }, { "M2K", "_RUT" }, { "RUT", "_RUT" }, { "_RUT", "_RUT" },
+                { "YM", "_DJX" }, { "MYM", "_DJX" }, { "DJI", "_DJX" }, { "DJX", "_DJX" }, { "_DJX", "_DJX" },
+                { "VIX", "_VIX" }, { "_VIX", "_VIX" }, { "_XSP", "_XSP" },
+                { "SPY", "SPY" }, { "QQQ", "QQQ" }, { "IWM", "IWM" }, { "GLD", "GLD" }, { "TLT", "TLT" }
+            };
 
         private PriceMapping EffectiveMapping(string source)
         {
@@ -1123,6 +1220,80 @@ namespace GexWalls
             }
         }
 
+        /// <summary>
+        /// One line per new snapshot describing what the source actually contained:
+        /// how many contracts survived each filter and which expiries they came
+        /// from. A level that looks wrong is usually a filter or an expiry mix,
+        /// and this says which.
+        /// </summary>
+        private void LogAudit(LevelsSnapshot snapshot)
+        {
+            try
+            {
+                var audit = snapshot?.Audit;
+                if (audit == null)
+                    return;
+
+                var builder = new System.Text.StringBuilder();
+                builder.Append("chain ").Append(audit.Source);
+                builder.Append(": ").Append(audit.ContractsTotal).Append(" contracts, used ").Append(audit.ContractsUsed);
+                builder.Append(" (expired ").Append(audit.ExcludedExpired);
+                builder.Append(", dte ").Append(audit.ExcludedDte);
+                builder.Append(", strike-distance ").Append(audit.ExcludedStrike);
+                builder.Append(", no oi/gamma ").Append(audit.ExcludedNoOiOrGamma);
+                builder.Append(", no iv ").Append(audit.ExcludedNoIv).Append(")");
+                builder.Append(" | iv units ").Append(audit.IvUnits);
+                builder.Append(" | expiries ").Append(audit.Expiries.Count);
+
+                var shown = 0;
+                foreach (var expiry in audit.Expiries)
+                {
+                    if (shown++ == 4)
+                        break;
+
+                    builder.Append(" ").Append(expiry.Expiry.ToString("MM-dd"))
+                        .Append(":dte").Append(expiry.Dte)
+                        .Append("/oi").Append(decimal.Round(expiry.OpenInterest, 0));
+                }
+
+                builder.Append(" | flip ")
+                    .Append(audit.FlipValue.HasValue ? audit.FlipValue.Value.ToString("0.##") : "none")
+                    .Append(" (").Append(audit.FlipCrossings).Append(" crossings in ")
+                    .Append(audit.FlipBandLow.ToString("0")).Append("..")
+                    .Append(audit.FlipBandHigh.ToString("0")).Append(")");
+
+                var line = builder.ToString();
+
+                if (line == _lastAuditLog)
+                    return;
+
+                _lastAuditLog = line;
+                Log(line);
+
+                // Cross-check the source itself: the gamma column CBOE ships and
+                // Black-Scholes gamma from the iv column must agree at spot, or
+                // one of them is stale for this row set.
+                var fromChain = Math.Abs(audit.ChainGexAtSpot);
+                var fromIv = Math.Abs(audit.BsGexAtSpot);
+                if (fromChain > 0m && fromIv > 0m)
+                {
+                    var ratio = fromIv / fromChain;
+                    if (ratio > 1.6m || ratio < 0.6m)
+                    {
+                        Log(string.Format(
+                            "WARNING source check: gex at spot from the chain's gamma column is {0:0.00e+0} " +
+                            "but {1:0.00e+0} from Black-Scholes on the quoted iv (ratio {2:0.00}) - the chain " +
+                            "greeks and its iv disagree for this snapshot",
+                            audit.ChainGexAtSpot, audit.BsGexAtSpot, ratio));
+                    }
+                }
+            }
+            catch
+            {
+                // diagnostics must never break the drawing
+            }
+        }
+
         private decimal ChartPrice()
         {
             try
@@ -1171,7 +1342,7 @@ namespace GexWalls
 
         private void Log(string message)
         {
-            GexLog.Write(message + " [" + (_sourceUsed ?? "") + "]");
+            GexLog.Write(message + " [src=" + (_sourceUsed ?? "") + "]");
         }
 
         #endregion
