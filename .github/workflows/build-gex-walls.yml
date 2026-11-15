@@ -42,9 +42,16 @@ jobs:
           dotnet --version
           dotnet --list-sdks
 
-      - name: Maths tests (offline, no ATAS needed)
+      - name: Maths tests (Python reference implementation)
         shell: pwsh
         run: python gex-walls/tools/test_gex_math.py
+
+      - name: Maths tests (the C# that ships in the DLL)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          dotnet run --project gex-walls/tests/GexMathTests.csproj -c Release
+          if ($LASTEXITCODE -ne 0) { throw "C# maths tests failed ($LASTEXITCODE)" }
 
       - name: Fetch ATAS reference assemblies
         shell: pwsh

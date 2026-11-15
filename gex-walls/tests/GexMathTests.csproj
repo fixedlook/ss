@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Runs the indicator's own maths outside ATAS: GexMath.cs and
+    CboeChainProvider.cs have no ATAS dependencies, so they can be compiled and
+    executed as a plain console app. Same fixture, same expectations as
+    tools/test_gex_math.py - that is what keeps the C# port honest.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>GexMathTests</AssemblyName>
+    <RootNamespace>GexWalls.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\src\GexWalls\GexModel.cs" Link="GexModel.cs" />
+    <Compile Include="..\src\GexWalls\GexMath.cs" Link="GexMath.cs" />
+    <Compile Include="..\src\GexWalls\CboeChainProvider.cs" Link="CboeChainProvider.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="fixture_spx.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>
