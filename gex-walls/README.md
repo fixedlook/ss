@@ -155,8 +155,9 @@ Nothing else. JSON parsing is `System.Text.Json` from the BCL, HTTP is
 
 | Setting | Default | What it does |
 | --- | --- | --- |
+| Source in use (read only) | — | the chain the indicator is actually using right now |
 | Auto-detect source from chart | on | pick the chain from the instrument name |
-| Source symbol (manual) | `_SPX` | used when auto-detect is off |
+| Source symbol (manual) | `_SPX` | **ignored while auto-detect is on** |
 | Data source | CboeDelayed | or `LocalJsonFile` — read the level file a poller writes |
 | Refresh interval | 120 s | CBOE data is 15 min delayed; faster polls buy nothing |
 | Min / Max days to expiry | 0 / 45 | gamma-relevant slice |

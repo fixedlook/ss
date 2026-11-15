@@ -98,6 +98,8 @@ namespace GexWalls
         private bool _recomputePending;
         private bool _disposed;
         private bool _loggedNoSource;
+        private string _lastMapLog = "";
+        private string _lastBlockedLog = "";
         private string _stepsSource = "";
         private int _stepsVersion;
         private int _lastWrittenBar = -1;
@@ -219,8 +221,30 @@ namespace GexWalls
             }
         }
 
-        [Display(Name = "Source symbol (manual)", GroupName = "Data", Order = 11,
-            Description = "CBOE symbol: _SPX, _NDX, _RUT, _VIX, SPY, QQQ ... used when auto-detect is off.")]
+        [Display(Name = "Source in use (read only)", GroupName = "Data", Order = 9,
+            Description = "The chain the indicator is actually resolving to right now. With auto-detect on, " +
+                          "this is what gets used and the manual field below is ignored.")]
+        public string SourceInUse
+        {
+            get
+            {
+                try
+                {
+                    return ResolveSource();
+                }
+                catch
+                {
+                    return "";
+                }
+            }
+
+            // computed - a no-op setter keeps the settings serializer happy
+            set { }
+        }
+
+        [Display(Name = "Source symbol (manual) - IGNORED while auto-detect is on", GroupName = "Data", Order = 11,
+            Description = "CBOE symbol: _SPX, _NDX, _RUT, _VIX, SPY, QQQ ... Only used after " +
+                          "'Auto-detect source from chart' is switched OFF.")]
         public string SourceSymbol
         {
             get => _sourceSymbol;
@@ -892,11 +916,6 @@ namespace GexWalls
             if (_barCount < 0)
                 return;
 
-            // Levels are in the chain's price space. Without a reference price on
-            // the chart the mapping would be wrong, so wait for one.
-            if (EffectiveMapping(snapshot.Source) != PriceMapping.Direct && ChartPrice() <= 0m)
-                return;
-
             // A different underlying means the stored steps are in the wrong price
             // space: drop them and repaint the whole history with the new chain.
             if (!string.Equals(_stepsSource, snapshot.Source, StringComparison.OrdinalIgnoreCase))
@@ -907,6 +926,14 @@ namespace GexWalls
             }
 
             var values = MapLevels(snapshot);
+
+            if (values == null)
+            {
+                // No usable reference price yet (cache file without a spot, or no
+                // candle). Previously the offset silently stayed 0 here, which drew
+                // raw chain strikes - every level under the price on an NQ chart.
+                return;
+            }
 
             if (_steps.Count == 0)
             {
@@ -975,19 +1002,26 @@ namespace GexWalls
             var scale = 1m;
             var offset = 0m;
 
+            // Both non-Direct modes anchor the chain to the chart price. Without
+            // that anchor the levels are raw strikes in the chain's own price
+            // space, which is never what anyone wants to see on a futures chart.
+            if (mapping != PriceMapping.Direct && (chartPrice <= 0m || snapshot.Spot <= 0m))
+            {
+                LogBlocked(mapping, snapshot, chartPrice);
+                return null;
+            }
+
             switch (mapping)
             {
                 case PriceMapping.Normalize:
-                    if (snapshot.Spot > 0m && chartPrice > 0m)
-                        scale = chartPrice / snapshot.Spot;
+                    scale = chartPrice / snapshot.Spot;
                     break;
 
                 case PriceMapping.AlignToChart:
-                    if (snapshot.Spot > 0m && chartPrice > 0m)
-                        offset = chartPrice - snapshot.Spot;
+                    offset = chartPrice - snapshot.Spot;
                     break;
 
-                case PriceMapping.Direct:
+                default:
                     scale = _scaleFactor;
                     offset = _priceOffset;
                     break;
@@ -1005,11 +1039,87 @@ namespace GexWalls
             values[(int)Slot.EmHigh] = Map(snapshot.EmHigh);
             values[(int)Slot.EmLow] = Map(snapshot.EmLow);
 
+            LogMapping(mapping, snapshot, chartPrice, scale, offset, values);
+
             return values;
 
             decimal? Map(decimal? level)
             {
                 return level.HasValue ? RoundToTick(level.Value * scale + offset) : (decimal?)null;
+            }
+        }
+
+        private void LogMapping(
+            PriceMapping mapping, LevelsSnapshot snapshot, decimal chartPrice,
+            decimal scale, decimal offset, decimal?[] values)
+        {
+            try
+            {
+                var age = (DateTime.UtcNow - snapshot.UpdatedUtc).TotalMinutes;
+                var line = string.Format(
+                    "map {0}: source={1}{2} spot={3:0.##} chart={4:0.##} scale={5:0.#####} offset={6:0.##} " +
+                    "age={7:0.#}m contracts={8} | zero={9} call1={10} call2={11} put1={12} put2={13} " +
+                    "iv1={14} iv2={15} mp={16} emH={17} emL={18}",
+                    mapping,
+                    string.IsNullOrEmpty(snapshot.Source) ? "?" : snapshot.Source,
+                    _autoSource ? " auto" : " manual",
+                    snapshot.Spot,
+                    chartPrice,
+                    scale,
+                    offset,
+                    age,
+                    snapshot.ContractsUsed,
+                    Show(values, Slot.ZeroGamma), Show(values, Slot.CallWall1), Show(values, Slot.CallWall2),
+                    Show(values, Slot.PutWall1), Show(values, Slot.PutWall2), Show(values, Slot.IvWall1),
+                    Show(values, Slot.IvWall2), Show(values, Slot.MaxPain), Show(values, Slot.EmHigh),
+                    Show(values, Slot.EmLow));
+
+                if (line == _lastMapLog)
+                    return;
+
+                _lastMapLog = line;
+                Log(line);
+
+                // A call wall sits at or above spot by construction, so after
+                // anchoring it must be at or above the chart price. If it is not,
+                // the two price spaces did not line up.
+                var call1 = values[(int)Slot.CallWall1];
+                if (mapping != PriceMapping.Direct && call1.HasValue && call1.Value < chartPrice)
+                {
+                    Log(string.Format(
+                        "WARNING call wall {0:0.##} mapped below chart price {1:0.##} - spot and chart are in " +
+                        "different price spaces (spot={2:0.##})", call1.Value, chartPrice, snapshot.Spot));
+                }
+            }
+            catch
+            {
+                // diagnostics must never break the drawing
+            }
+        }
+
+        private static string Show(decimal?[] values, Slot slot)
+        {
+            var value = values[(int)slot];
+            return value.HasValue ? value.Value.ToString("0.##") : "-";
+        }
+
+        private void LogBlocked(PriceMapping mapping, LevelsSnapshot snapshot, decimal chartPrice)
+        {
+            try
+            {
+                var line = string.Format(
+                    "cannot map {0}: spot={1:0.##} chart={2:0.##} - waiting for a reference price",
+                    mapping, snapshot.Spot, chartPrice);
+
+                if (line == _lastBlockedLog)
+                    return;
+
+                _lastBlockedLog = line;
+                Log(line);
+            }
+            catch
+            {
+                // ignore
             }
         }
 
