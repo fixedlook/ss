@@ -31,6 +31,8 @@ get: the same underlying data the paid vendors start from, locally, for nothing.
 | `src/GexWalls/GexWallsIndicator.cs` | Chart drawing, refresh timer, settings, price mapping |
 | `tools/gex_levels.py` | Same maths in Python — verify the numbers before trusting the chart, or run it as an external poller |
 | `tools/test_gex_math.py` | Offline test: plants walls in a synthetic chain and asserts the levels come back out |
+| `tests/` | Runs the *shipped* C# maths against the same fixture — this is what keeps the C# port honest |
+| `.github/workflows/build-gex-walls.yml` | Fetches ATAS reference assemblies, tests, builds, smoke-tests, publishes the DLL |
 
 The Python version is the reference implementation: `test_gex_math.py` covers it
 (26 checks), and `GexMath.cs` is a straight port. Change a formula in one, change
@@ -95,40 +97,55 @@ Anything else falls back to the manual source symbol.
 
 ---
 
-## Build
+## Download the DLL
 
-Needs the .NET SDK matching your ATAS build (ATAS X is .NET 10 — if your
-`ATAS.Indicators.dll` is older, change `TargetFramework` to `net8.0-windows`).
+Built by CI on every push that touches `gex-walls/`, and published as a release
+asset:
+
+**[GexWalls.dll — release gex-walls-v0.1.0](https://github.com/fixedlook/ss/releases/download/gex-walls-v0.1.0/GexWalls.dll)**
+
+- size: 41,472 bytes
+- sha256: `43c00d180dfd0327d925b852812ca9a10e1dce1d998fbf633109521f3ef42700`
+
+Install: copy it into `%APPDATA%\ATAS X\Indicators\` (classic ATAS:
+`%APPDATA%\ATAS\Indicators\`), reload custom indicators in ATAS, then add
+**GEX / IV Walls (CBOE)** from the Custom group.
+
+Build log and per-step status:
+`Actions → Build GEX Walls indicator`.
+
+### What CI proves before it publishes
+
+Every run, in order: the Python reference maths (26 checks), then **the C#
+that ships in the DLL** (`gex-walls/tests` compiles `GexMath.cs` and
+`CboeChainProvider.cs` unchanged and runs them against the same fixture, 21
+checks), then a real `dotnet build` against the ATAS reference assemblies, then
+a smoke test of the output (indicator type discoverable, `DisplayName` literal
+present, no platform DLLs copied next to it). A red run cannot publish.
+
+### Build it yourself
+
+You only need this if your ATAS build rejects the prebuilt DLL.
 
 ```bash
-cd src/GexWalls
+cd gex-walls/src/GexWalls
 dotnet build -c Release -p:AtasDir="C:\Program Files\ATAS X"
 ```
 
 The project references three assemblies straight out of the ATAS install folder:
 
-- `ATAS.Indicators.dll` — the indicator base class, data series, `RedrawChart`
+- `ATAS.Indicators.dll` — indicator base class, data series, `RedrawChart`
 - `OFT.Rendering.dll` — `LineDashStyle`
-- `Avalonia.Base.dll` — `Dispatcher`, for marshalling the refresh onto the UI thread
+- `Avalonia.Base.dll` — `Dispatcher`/`DispatcherTimer`, for marshalling the refresh onto the UI thread
 
-Nothing else. JSON parsing is `System.Text.Json` from the BCL, the HTTP client is
-`System.Net.Http`, and the logger writes its own file — so there are no NuGet
-packages to restore.
+Nothing else. JSON parsing is `System.Text.Json` from the BCL, HTTP is
+`System.Net.Http`, and the logger writes its own file — no NuGet packages.
 
-Install: drop `GexWalls.dll` into `%APPDATA%\ATAS X\Indicators\` (classic ATAS:
-`%APPDATA%\ATAS\Indicators\`), reload custom indicators in ATAS, then add
-**GEX / IV Walls (CBOE)** from the Custom group.
-
-> Honest note: this was written without an ATAS install to compile against, so
-> the first `dotnet build` is the real test. The API surface used is the
-> documented one (`Indicator`, `ValueDataSeries`, `LineSeries`-style levels,
-> `RedrawChart(new RedrawArg(Container.Region))`, `Dispatcher.UIThread`) and it
-> matches what shipping ATAS X indicators do, but expect the possibility of one
-> or two namespace nits. If `Series.Color = color.Convert()` complains, your
-> build wants `System.Windows.Media.Color` there instead of `System.Drawing.Color`
-> — it is the only line in the drawing code that touches that conversion.
-
----
+> Version note: the release DLL is compiled against the reference assemblies
+> pinned in the workflow, which come from a public ATAS X indicator repo and may
+> not match your exact ATAS build. ATAS resolves assemblies by name, so this
+> normally just works; if ATAS refuses to load it, rebuild locally against your
+> own install folder — that is the only difference.
 
 ## Settings
 
