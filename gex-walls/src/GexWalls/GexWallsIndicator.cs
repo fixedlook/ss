@@ -97,12 +97,12 @@ namespace GexWalls
         private ChainSnapshot _lastChain;
         private bool _recomputePending;
 
-        private Color _zeroGammaColor = Colors.Gold;
-        private Color _callWallColor = Colors.LimeGreen;
-        private Color _putWallColor = Colors.OrangeRed;
-        private Color _ivWallColor = Colors.DodgerBlue;
-        private Color _maxPainColor = Colors.Gray;
-        private Color _expectedMoveColor = Colors.MediumPurple;
+        private Color _zeroGammaColor = Color.Gold;
+        private Color _callWallColor = Color.LimeGreen;
+        private Color _putWallColor = Color.OrangeRed;
+        private Color _ivWallColor = Color.DodgerBlue;
+        private Color _maxPainColor = Color.Gray;
+        private Color _expectedMoveColor = Color.MediumPurple;
 
         private bool _showZeroGamma = true;
         private bool _showCallWalls = true;
