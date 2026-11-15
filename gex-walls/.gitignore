@@ -1,0 +1,8 @@
+## build output
+bin/
+obj/
+*.user
+
+## local scratch
+tools/_fixture.json
+tools/__pycache__/
