@@ -1,0 +1,223 @@
+name: Build GEX Walls indicator
+
+# Builds gex-walls/src/GexWalls into a drop-in ATAS indicator DLL.
+#
+# The ATAS reference assemblies are proprietary and are NOT in this repo: they
+# are fetched at build time only and never committed. Avalonia.Base comes from
+# NuGet. The one thing that cannot be automated here is matching your exact ATAS
+# build - the DLL is compiled against the reference set pinned below.
+
+on:
+  push:
+    paths:
+      - 'gex-walls/**'
+      - '.github/workflows/build-gex-walls.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  DOTNET_VERSION: '10.0.x'
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  ATAS_REFS_REPO: profitnotiondaily/atasx-superflow
+  ATAS_REFS_SHA: 3af08b0d8f09af64de480d9903ab55c943c2b998
+  RELEASE_TAG: gex-walls-v0.1.0
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Show toolchain
+        shell: pwsh
+        run: |
+          dotnet --version
+          dotnet --list-sdks
+
+      - name: Maths tests (Python reference implementation)
+        shell: pwsh
+        run: python gex-walls/tools/test_gex_math.py
+
+      - name: Maths tests (the C# that ships in the DLL)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          dotnet run --project gex-walls/tests/GexMathTests.csproj -c Release
+          if ($LASTEXITCODE -ne 0) { throw "C# maths tests failed ($LASTEXITCODE)" }
+
+      - name: Fetch ATAS reference assemblies
+        shell: pwsh
+        run: |
+          # Any failure here is reported as a ::error:: annotation, which is
+          # readable through the API even when log downloads are unavailable.
+          $ErrorActionPreference = 'Stop'
+          try {
+            $libs = Join-Path $env:GITHUB_WORKSPACE 'libs'
+            New-Item -ItemType Directory -Force -Path $libs | Out-Null
+
+            $base = "https://raw.githubusercontent.com/$env:ATAS_REFS_REPO/$env:ATAS_REFS_SHA/libs"
+            $dlls = 'ATAS.Indicators','ATAS.DataFeedsCore','OFT.Rendering','OFT.Attributes','OFT.Core','OFT.Platform.Core'
+            foreach ($dll in $dlls) {
+              $url = "$base/$dll.dll"
+              Write-Host "GET $url"
+              Invoke-WebRequest -Uri $url -OutFile (Join-Path $libs "$dll.dll")
+              $len = (Get-Item (Join-Path $libs "$dll.dll")).Length
+              if ($len -lt 4096) { throw "$dll.dll looks truncated ($len bytes) - is it an LFS pointer?" }
+              Write-Host ("  ok {0,-22} {1,9:N0} bytes" -f "$dll.dll", $len)
+            }
+
+            # Avalonia.Base.dll is shipped inside one of the Avalonia packages, and
+            # which one depends on the Avalonia version. Try the candidates in turn
+            # and stop at the first package that actually contains the assembly.
+            $candidates = 'avalonia','avalonia.base','avalonia.controls','avalonia.desktop'
+            $copied = $false
+            foreach ($package in $candidates) {
+              $indexUrl = "https://api.nuget.org/v3-flatcontainer/$package/index.json"
+              try {
+                $versions = (Invoke-RestMethod -Uri $indexUrl).versions
+              }
+              catch {
+                Write-Host "  $package : no such package ($($_.Exception.Message))"
+                continue
+              }
+
+              $version = $versions |
+                Where-Object { $_ -like '11.*' -and $_ -notmatch '-' } |
+                Sort-Object { [version]$_ } |
+                Select-Object -Last 1
+              if (-not $version) { Write-Host "  $package : no stable 11.x version"; continue }
+
+              $nupkg = Join-Path $env:RUNNER_TEMP "$package.zip"
+              $nupkgUrl = "https://api.nuget.org/v3-flatcontainer/$package/$version/$package.$version.nupkg"
+              Write-Host "GET $nupkgUrl"
+              Invoke-WebRequest -Uri $nupkgUrl -OutFile $nupkg
+              $extract = Join-Path $env:RUNNER_TEMP $package
+              Expand-Archive -Path $nupkg -DestinationPath $extract -Force
+
+              $found = Get-ChildItem -Path $extract -Filter 'Avalonia.Base.dll' -Recurse |
+                Sort-Object FullName | Select-Object -Last 1
+              if (-not $found) {
+                Write-Host "  $package $version : Avalonia.Base.dll not inside"
+                continue
+              }
+
+              Copy-Item $found.FullName (Join-Path $libs 'Avalonia.Base.dll')
+              Write-Host ("  ok Avalonia.Base.dll  {0,9:N0} bytes from {1} {2}" -f $found.Length, $package, $version)
+              $copied = $true
+              break
+            }
+
+            if (-not $copied) { throw 'Avalonia.Base.dll could not be located in any Avalonia nuget package' }
+
+            Write-Host "::notice::reference assemblies ready (Avalonia.Base $version)"
+          }
+          catch {
+            Write-Host "::error::reference fetch failed: $($_.Exception.Message)"
+            $where = ($_.InvocationInfo.PositionMessage -replace "`r?`n", ' ')
+            if ($where) { Write-Host "::error::thrown at $where" }
+            throw
+          }
+
+      - name: Build
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          try {
+            $atasDir = Join-Path $env:GITHUB_WORKSPACE 'libs'
+            dotnet build gex-walls/src/GexWalls/GexWalls.csproj -c Release "-p:AtasDir=$atasDir"
+            if ($LASTEXITCODE -ne 0) { throw "dotnet build failed with exit code $LASTEXITCODE" }
+
+            $dll = 'gex-walls/src/GexWalls/bin/Release/GexWalls.dll'
+            if (-not (Test-Path $dll)) { throw "expected output missing: $dll" }
+            Write-Host ("::notice::built GexWalls.dll ({0:N0} bytes)" -f (Get-Item $dll).Length)
+          }
+          catch {
+            Write-Host "::error::build failed: $($_.Exception.Message)"
+            throw
+          }
+
+      - name: Smoke-test the assembly
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dll = Resolve-Path 'gex-walls/src/GexWalls/bin/Release/GexWalls.dll'
+          $bytes = [System.IO.File]::ReadAllBytes($dll)
+
+          # Names (types, members) are UTF-8 in the #Strings heap.
+          $meta = [System.Text.Encoding]::Latin1.GetString($bytes)
+
+          # String literals are UTF-16LE in the #US heap, and a literal can start
+          # at an odd byte offset, so decode both alignments.
+          $utf16 = @(
+            [System.Text.Encoding]::Unicode.GetString($bytes),
+            [System.Text.Encoding]::Unicode.GetString($bytes, 1, $bytes.Length - 1)
+          )
+
+          $problems = @()
+
+          foreach ($name in 'GexWallsIndicator','ValueDataSeries','RedrawChart','InstrumentInfo','ATAS.Indicators') {
+            if ($meta -notmatch [regex]::Escape($name)) {
+              $problems += "missing name in metadata: $name"
+            } else {
+              Write-Host "  ok name: $name"
+            }
+          }
+
+          # Attribute string arguments are UTF-8 SerStrings in the #Blob heap;
+          # other literals are UTF-16 in #US. Check both views.
+          $literal = 'GEX / IV Walls (CBOE)'
+          $inMeta = $meta -match [regex]::Escape($literal)
+          $inUtf16 = -not ($utf16 -notmatch [regex]::Escape($literal))
+          if ($inMeta -or $inUtf16) {
+            Write-Host "  ok DisplayName literal (utf8: $inMeta, utf16: $inUtf16)"
+          } else {
+            $problems += "missing DisplayName literal: $literal"
+          }
+
+          # The assembly must not ship private copies of the platform assemblies.
+          $strays = @(Get-ChildItem 'gex-walls/src/GexWalls/bin/Release' -Filter '*.dll' |
+            Where-Object { $_.Name -ne 'GexWalls.dll' })
+          if ($strays.Count -gt 0) {
+            $problems += "unexpected assemblies next to the indicator: $($strays.Name -join ', ')"
+          } else {
+            Write-Host '  ok output folder contains GexWalls.dll only'
+          }
+
+          Write-Host ("  dll size: {0:N0} bytes" -f $bytes.Length)
+
+          if ($problems.Count -gt 0) {
+            foreach ($problem in $problems) { Write-Host "::error::$problem" }
+            throw "assembly smoke test failed with $($problems.Count) problem(s)"
+          }
+          Write-Host '::notice::assembly smoke test passed'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GexWalls-indicator
+          path: gex-walls/src/GexWalls/bin/Release/GexWalls.dll
+          if-no-files-found: error
+
+      - name: Publish release asset
+        if: github.ref == 'refs/heads/arena/6365b04e-ss' || github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = $env:RELEASE_TAG
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --target $env:GITHUB_SHA --title 'GEX / IV Walls indicator for ATAS' --notes-file 'gex-walls/RELEASE_NOTES.md'
+            if ($LASTEXITCODE -ne 0) { throw "gh release create failed ($LASTEXITCODE)" }
+          }
+          gh release upload $tag 'gex-walls/src/GexWalls/bin/Release/GexWalls.dll' --clobber
+          if ($LASTEXITCODE -ne 0) { throw "gh release upload failed ($LASTEXITCODE)" }
+          Write-Host 'release asset published'
